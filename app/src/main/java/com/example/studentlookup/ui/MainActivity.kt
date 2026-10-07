@@ -43,7 +43,8 @@ class MainActivity : AppCompatActivity() {
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
 
-        binding.tvRom.text = "机型适配：${RomUtils.getRom().name}\n${RomUtils.guidance()}"
+        binding.tvRom.text = "机型适配：${RomUtils.getRom().name}\n${RomUtils.guidance()}" +
+            "\n\n开启无障碍服务（点下方按钮后按此操作）：\n${RomUtils.accessibilityGuidance()}"
 
         binding.btnImport.setOnClickListener {
             importLauncher.launch(arrayOf(
