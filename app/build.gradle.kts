@@ -16,7 +16,23 @@ android {
         versionName = "1.0"
     }
 
+    // 固定签名（关键）：GitHub Actions 每次新建的随机 debug keystore 会让 APK 签名变化，
+    // 导致 `adb install -r` 报 INSTALL_FAILED_UPDATE_INCOMPATIBLE（必须卸载重装、丢数据/授权）。
+    // 这里用仓库内固定的 debug keystore，保证每次云端构建出来的包签名一致、可原地升级。
+    // 仓库为私有；如需更严格，可改从 CI Secrets 注入。
+    signingConfigs {
+        create("slkdebug") {
+            storeFile = rootProject.file("keystore/studentlookup-debug.keystore")
+            storePassword = "studentlookup"
+            keyAlias = "studentlookup"
+            keyPassword = "studentlookup"
+        }
+    }
+
     buildTypes {
+        debug {
+            signingConfig = signingConfigs.getByName("slkdebug")
+        }
         release {
             isMinifyEnabled = false
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
