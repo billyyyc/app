@@ -9,6 +9,17 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
+    <!--
+      仅用于「修复无障碍连接」：把本应用的无障碍服务从系统设置里摘掉再装回，
+      触发系统重新绑定（等价于用户在设置里手动「关→开」一次）。
+      普通应用拿不到该权限，需要一次性 adb 授权：
+        adb shell pm grant com.example.studentlookup android.permission.WRITE_SECURE_SETTINGS
+      未授权时 canSelfRepair() 返回 false，App 会改为引导用户手动操作。
+    -->
+    <uses-permission
+        android:name="android.permission.WRITE_SECURE_SETTINGS"
+        tools:ignore="ProtectedPermissions" />
+
     <application
         android:name=".App"
         android:allowBackup="true"

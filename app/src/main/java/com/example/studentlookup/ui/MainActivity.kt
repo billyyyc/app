@@ -17,10 +17,11 @@ import com.example.studentlookup.R
 import com.example.studentlookup.data.import.DataImporter
 import com.example.studentlookup.databinding.ActivityMainBinding
 import com.example.studentlookup.service.FloatingBallService
-import com.example.studentlookup.service.LookupAccessibilityService
+import com.example.studentlookup.util.AccessibilitySupport
 import com.example.studentlookup.util.RomUtils
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.text.SimpleDateFormat
@@ -61,6 +62,15 @@ class MainActivity : AppCompatActivity() {
         binding.btnOpenOverlay.setOnClickListener {
             startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION))
         }
+        binding.btnRepair.setOnClickListener { repairAccessibility() }
+        binding.btnOcr.setOnClickListener {
+            Toast.makeText(
+                this,
+                "接下来会弹出「开始录制/屏幕采集」授权，请点允许：仅用于识别微信标题，不会保存画面。",
+                Toast.LENGTH_LONG
+            ).show()
+            startActivity(Intent(this, CapturePermissionActivity::class.java))
+        }
 
         refreshDataInfo()
     }
@@ -68,43 +78,65 @@ class MainActivity : AppCompatActivity() {
     override fun onResume() {
         super.onResume()
         updatePermissionStatus()
+        // 刚回到前台时无障碍服务可能还在重连，稍后再确认一次，避免误报「未连接」
+        binding.root.postDelayed({ updatePermissionStatus() }, 900)
     }
 
     private fun updatePermissionStatus() {
         val overlay = Settings.canDrawOverlays(this)
-        val acc = isAccessibilityEnabled()
+        val accEnabled = AccessibilitySupport.isEnabled(this)
+        val accConnected = AccessibilitySupport.isConnected()
         binding.tvPerm.text = buildString {
             append("悬浮窗权限：").append(if (overlay) "已开启 ✅" else "未开启 ❌").append("\n")
-            append("无障碍服务：").append(if (acc) "已开启 ✅" else "未开启 ❌")
+            append("无障碍服务：").append(
+                when {
+                    !accEnabled -> "未开启 ❌"
+                    accConnected -> "已开启 ✅（运行中）"
+                    else -> "已开启 ⚠️ 但未连接（点下方「修复无障碍连接」）"
+                }
+            )
         }
-        binding.btnStart.isEnabled = overlay && acc
+        binding.btnStart.isEnabled = overlay && accEnabled
         binding.btnOpenOverlay.visibility = if (overlay) android.view.View.GONE else android.view.View.VISIBLE
-        binding.btnOpenAccessibility.visibility = if (acc) android.view.View.GONE else android.view.View.VISIBLE
+        binding.btnOpenAccessibility.visibility =
+            if (accEnabled) android.view.View.GONE else android.view.View.VISIBLE
+        binding.btnRepair.visibility =
+            if (accEnabled && !accConnected) android.view.View.VISIBLE else android.view.View.GONE
     }
 
-    private fun isAccessibilityEnabled(): Boolean {
-        // 主判定：用系统 AccessibilityManager 标准 API（不受各 ROM 私有字符串格式影响）
-        val serviceName = LookupAccessibilityService::class.java.name
-        val enabledViaApi = runCatching {
-            val am = getSystemService(Context.ACCESSIBILITY_SERVICE) as android.view.accessibility.AccessibilityManager
-            am.getEnabledAccessibilityServiceList(
-                android.accessibilityservice.AccessibilityServiceInfo.FEEDBACK_ALL_MASK
-            ).any {
-                it.resolveInfo.serviceInfo.packageName == packageName &&
-                    it.resolveInfo.serviceInfo.name == serviceName
+    /** 「修复无障碍连接」：解除「设置里已开启、但服务没真正运行」的假死态。 */
+    private fun repairAccessibility() {
+        when {
+            !AccessibilitySupport.isEnabled(this) -> {
+                Toast.makeText(this, "请先开启「学员速查」的无障碍服务", Toast.LENGTH_LONG).show()
+                startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
             }
-        }.getOrDefault(false)
-        if (enabledViaApi) return true
-
-        // 兜底：解析系统安全设置字符串，宽松匹配（兼容 ColorOS 等把值存成不同格式的 ROM）
-        val simple = LookupAccessibilityService::class.java.simpleName
-        val raw = Settings.Secure.getString(
-            contentResolver, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
-        ) ?: return false
-        return raw.split(":").any {
-            it.equals("$packageName/$simple", true) ||
-                it.endsWith(".$simple", true) ||
-                it.equals(serviceName, true)
+            AccessibilitySupport.isConnected() -> {
+                Toast.makeText(this, "无障碍服务运行正常，无需修复", Toast.LENGTH_SHORT).show()
+            }
+            !AccessibilitySupport.canSelfRepair(this) -> {
+                Toast.makeText(
+                    this,
+                    "请打开无障碍设置，把「学员速查」先关闭、再打开一次，即可重新连接。",
+                    Toast.LENGTH_LONG
+                ).show()
+                startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+            }
+            else -> {
+                Toast.makeText(this, "正在重新连接无障碍服务…", Toast.LENGTH_SHORT).show()
+                CoroutineScope(Dispatchers.Main).launch {
+                    AccessibilitySupport.rebind(this@MainActivity)
+                    delay(1500)
+                    updatePermissionStatus()
+                    Toast.makeText(
+                        this@MainActivity,
+                        if (AccessibilitySupport.isConnected())
+                            "已重新连接 ✅ 现在可以去微信点悬浮球了"
+                        else "仍未连接；请在系统设置 → 无障碍里把本服务「关→开」一次",
+                        Toast.LENGTH_LONG
+                    ).show()
+                }
+            }
         }
     }
 

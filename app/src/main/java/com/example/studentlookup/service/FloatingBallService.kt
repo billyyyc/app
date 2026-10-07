@@ -11,6 +11,7 @@ import android.os.Build
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
+import android.util.Log
 import android.view.Gravity
 import android.view.LayoutInflater
 import android.view.MotionEvent
@@ -23,15 +24,18 @@ import com.example.studentlookup.match.Matcher
 import com.example.studentlookup.ocr.OcrFallback
 import com.example.studentlookup.ui.MenuAction
 import com.example.studentlookup.ui.ResultCardView
+import com.example.studentlookup.util.AccessibilitySupport
 import com.example.studentlookup.util.RomUtils
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlin.math.abs
 
 class FloatingBallService : Service() {
 
     companion object {
+        private const val TAG = "SLK-Ball"
         private const val CHANNEL_ID = "float_channel"
         private const val NOTIF_ID = 1
         var isRunning = false
@@ -82,42 +86,170 @@ class FloatingBallService : Service() {
 
     private fun onBallClick() {
         val acc = LookupAccessibilityService.instance
+        Log.d(
+            TAG,
+            "tap: acc=${acc != null} enabled=${AccessibilitySupport.isEnabled(this)} " +
+                "connectedAt=${LookupAccessibilityService.connectedAt}"
+        )
         if (acc == null) {
-            toast("请先在系统设置中开启「学员速查」无障碍服务")
-            openAccessibilitySettings()
+            // 绝不静默失败：无论哪种原因，都给出看得见、点得动的卡片
+            handleAccessibilityNotRunning()
             return
         }
         if (!acc.isInWechat()) {
-            toast("请在微信对话界面使用")
+            Log.d(TAG, "tap: not in wechat, pkg=${acc.currentPackage}")
+            notifyCard(
+                "当前不在微信对话界面",
+                "请先打开要查询的学员/家长的微信聊天窗口，再点悬浮球。\n" +
+                    "也可以直接在这里手动搜索姓名。",
+                listOf("手动搜索" to { showManualSearch() }, "知道了" to {})
+            )
             return
         }
         val title = acc.readConversationTitle()
+        Log.d(TAG, "tap: title=$title")
         if (!title.isNullOrBlank()) {
             query(title)
         } else {
             // 兜底：截图 OCR（放到 IO 线程，避免截屏等待阻塞主线程）
-            toast("无障碍未读到标题，尝试截图识别…")
-            CoroutineScope(Dispatchers.IO).launch {
-                val text = OcrFallback.recognizeTop(this@FloatingBallService)
-                kotlinx.coroutines.withContext(Dispatchers.Main) {
-                    if (text.isNullOrBlank()) {
-                        toast("未能识别，请长按悬浮球手动搜索")
-                    } else {
-                        query(text)
-                    }
+            tryOcr()
+        }
+    }
+
+    /** 无障碍服务「没连上」时的处理：能自愈就自愈，否则给逐步可见的修复引导。 */
+    private fun handleAccessibilityNotRunning() {
+        if (!AccessibilitySupport.isEnabled(this)) {
+            notifyCard(
+                "无障碍服务未开启",
+                "请先开启「学员速查」的无障碍服务，再点悬浮球。\n\n" +
+                    "开启路径：系统设置 → 无障碍 → 已下载的服务 → 学员速查 → 打开开关。",
+                listOf(
+                    "去开启无障碍" to { openAccessibilitySettings() },
+                    "手动搜索" to { showManualSearch() }
+                )
+            )
+            return
+        }
+
+        // 已开启但没真正绑定（重装 / 被系统清理后的假死态）
+        if (!AccessibilitySupport.canSelfRepair(this)) {
+            notifyCard(
+                "无障碍服务未真正运行",
+                "系统里显示已开启，但没有把它绑定起来（重装 App 或被系统清理后常见）。\n\n" +
+                    "修复：打开系统设置 → 无障碍 → 已下载的服务 → 学员速查 → 先关闭、再打开。\n" +
+                    "修好前可以先用下面的手动搜索。",
+                listOf(
+                    "去无障碍设置" to { openAccessibilitySettings() },
+                    "手动搜索" to { showManualSearch() }
+                )
+            )
+            return
+        }
+
+        toast("正在重新连接无障碍服务…")
+        CoroutineScope(Dispatchers.Main).launch {
+            val requested = AccessibilitySupport.rebind(this@FloatingBallService)
+            delay(1200)
+            if (LookupAccessibilityService.instance != null) {
+                toast("已重新连接，请再点一次悬浮球")
+            } else if (requested) {
+                notifyCard(
+                    "正在重新连接",
+                    "已请求系统重新绑定无障碍服务，请等 1~2 秒后再点悬浮球。\n" +
+                        "若仍无效，请在系统设置 → 无障碍里把本服务「关→开」一次。",
+                    listOf(
+                        "去无障碍设置" to { openAccessibilitySettings() },
+                        "手动搜索" to { showManualSearch() }
+                    )
+                )
+            } else {
+                notifyCard(
+                    "无障碍服务未真正运行",
+                    "自动重连失败。请打开系统设置 → 无障碍 → 已下载的服务 → 学员速查，" +
+                        "先关闭、再打开。\n修好前可以先用下面的手动搜索。",
+                    listOf(
+                        "去无障碍设置" to { openAccessibilitySettings() },
+                        "手动搜索" to { showManualSearch() }
+                    )
+                )
+            }
+        }
+    }
+
+    /** 无障碍读不到标题时的 OCR 兜底。 */
+    private fun tryOcr() {
+        if (!com.example.studentlookup.service.ScreenCaptureService.hasPermission()) {
+            notifyCard(
+                "无法读取微信标题",
+                "无障碍没有读到会话标题。可以改用「截图识别」（首次需授权屏幕采集，仅用于识别标题，不保存画面），" +
+                    "或直接手动搜索姓名。",
+                listOf(
+                    "授权截图识别" to { requestCapturePermission() },
+                    "手动搜索" to { showManualSearch() }
+                )
+            )
+            return
+        }
+        toast("正在截图识别…")
+        CoroutineScope(Dispatchers.IO).launch {
+            val text = OcrFallback.recognizeTop(this@FloatingBallService)
+            kotlinx.coroutines.withContext(Dispatchers.Main) {
+                if (text.isNullOrBlank()) {
+                    notifyCard(
+                        "未能识别",
+                        "截图识别没有读到姓名。请手动输入姓名搜索。",
+                        listOf("手动搜索" to { showManualSearch() })
+                    )
+                } else {
+                    query(text)
                 }
             }
         }
     }
 
+    private fun requestCapturePermission() {
+        runCatching {
+            startActivity(
+                Intent(this, com.example.studentlookup.ui.CapturePermissionActivity::class.java)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            )
+        }.onFailure { Log.w(TAG, "open capture permission failed: ${it.message}") }
+    }
+
+    private fun showManualSearch() {
+        ResultCardView.showManualSearch(this) { q -> query(q) }
+    }
+
+    private fun notifyCard(title: String, message: String, actions: List<Pair<String, () -> Unit>>) {
+        ResultCardView.showNotice(this, title, message, actions)
+    }
+
     private fun query(raw: String) {
+        // 隐藏的运行时校准入口：手动搜索框里输入 `id:com.tencent.mm:id/xxx`
+        if (raw.startsWith("id:")) {
+            val id = raw.removePrefix("id:").trim()
+            if (id.isNotEmpty()) {
+                AccessibilitySupport.setTitleCandidateIds(this, listOf(id))
+                toast("已记录标题控件 id，请再点一次悬浮球")
+            }
+            return
+        }
         CoroutineScope(Dispatchers.IO).launch {
             val all = (applicationContext as App).database.studentDao().getAll()
             val result = Matcher.match(raw, all)
             kotlinx.coroutines.withContext(Dispatchers.Main) {
                 ResultCardView.show(this@FloatingBallService, result,
                     onManualSearch = { q -> query(q) },
-                    onDump = { LookupAccessibilityService.instance?.dumpNodes() }
+                    onDump = {
+                        val dump = LookupAccessibilityService.instance?.dumpNodes()
+                        if (dump != null) {
+                            val cm = getSystemService(CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                            cm.setPrimaryClip(
+                                android.content.ClipData.newPlainText("dump", dump)
+                            )
+                        }
+                        dump
+                    }
                 )
             }
         }

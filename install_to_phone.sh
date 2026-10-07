@@ -25,6 +25,14 @@ echo ">> 重装 APK（保留数据/授权）"
 
 echo ">> 自动补授权（跳过手动开关）"
 "$ADB" shell appops set "$PKG" SYSTEM_ALERT_WINDOW allow
+"$ADB" shell pm grant "$PKG" android.permission.POST_NOTIFICATIONS || true
+# 让 App 具备「自愈」能力（把无障碍服务摘掉再装回，触发系统重绑）
+"$ADB" shell pm grant "$PKG" android.permission.WRITE_SECURE_SETTINGS || true
+
+# 关键：重装后系统常处于「设置里已启用、但服务没绑定」的假死态（点悬浮球没反应的根因）。
+# 先 delete 再 put，制造一次真实变更，逼系统重新绑定无障碍服务。
+echo ">> 强制重新绑定无障碍服务"
+"$ADB" shell settings delete secure enabled_accessibility_services >/dev/null 2>&1 || true
 "$ADB" shell settings put secure enabled_accessibility_services "$SVC"
 "$ADB" shell settings put secure accessibility_enabled 1
 

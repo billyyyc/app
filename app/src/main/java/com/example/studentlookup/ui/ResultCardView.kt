@@ -46,6 +46,7 @@ object ResultCardView {
         val btnSearch = root.findViewById<Button>(R.id.btn_search)
         val btnCopy = root.findViewById<Button>(R.id.btn_copy)
         val btnClose = root.findViewById<Button>(R.id.btn_close)
+        val btnDump = root.findViewById<Button>(R.id.btn_dump)
 
         tvTitle.text = "查询：${result.query}"
 
@@ -99,8 +100,73 @@ object ResultCardView {
             val q = etSearch.text.toString().trim()
             if (q.isNotEmpty()) onManualSearch(q)
         }
+        if (onDump == null) {
+            btnDump.visibility = View.GONE
+        } else {
+            btnDump.setOnClickListener {
+                val text = onDump.invoke()
+                Toast.makeText(
+                    context,
+                    if (text.isNullOrBlank()) "没有节点信息（无障碍未连接？）"
+                    else "已复制节点信息，可发给技术支持校准标题",
+                    Toast.LENGTH_SHORT
+                ).show()
+            }
+        }
         btnClose.setOnClickListener { dismiss() }
 
+        addOverlay(context, root)
+        current = root
+    }
+
+    /**
+     * 纯提示卡片：用于「无障碍没连上 / 不在微信 / 识别失败」等场景。
+     * 与结果卡不同，它一定会显示出来 —— 点悬浮球“没反应”这种体验永远不该再出现。
+     */
+    fun showNotice(
+        context: Context,
+        title: String,
+        message: String,
+        actions: List<Pair<String, () -> Unit>>
+    ) {
+        dismiss()
+        val root = LinearLayout(context).apply {
+            orientation = LinearLayout.VERTICAL
+            setBackgroundColor(0x66000000)
+            gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
+            setPadding(0, dp(context, 64), 0, 0)
+        }
+        val card = LinearLayout(context).apply {
+            orientation = LinearLayout.VERTICAL
+            setBackgroundColor(context.getColor(R.color.card_bg))
+            val pad = dp(context, 16)
+            setPadding(pad, pad, pad, pad)
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply { setMargins(dp(context, 16), 0, dp(context, 16), 0) }
+            // 有监听器才会消费点击，避免误触卡片把浮层关掉
+            setOnClickListener { }
+        }
+        card.addView(TextView(context).apply {
+            text = title
+            textSize = 16f
+            setTypeface(null, android.graphics.Typeface.BOLD)
+            setTextColor(context.getColor(R.color.text_primary))
+        })
+        card.addView(TextView(context).apply {
+            text = message
+            textSize = 14f
+            setTextColor(context.getColor(R.color.text_secondary))
+            setPadding(0, dp(context, 8), 0, 0)
+        })
+        for ((label, action) in actions) {
+            card.addView(Button(context).apply {
+                text = label
+                setOnClickListener { dismiss(); action() }
+            })
+        }
+        root.addView(card)
         addOverlay(context, root)
         current = root
     }

@@ -65,6 +65,20 @@
             android:text="去开启悬浮窗权限" />
 
         <Button
+            android:id="@+id/btn_repair"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:text="修复无障碍连接" />
+
+        <Button
+            android:id="@+id/btn_ocr"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:text="授权截图识别（可选兜底）" />
+
+        <Button
             android:id="@+id/btn_start"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"

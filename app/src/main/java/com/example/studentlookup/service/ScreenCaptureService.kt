@@ -18,6 +18,7 @@ import android.os.Build
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
+import android.util.Log
 import androidx.core.app.NotificationCompat
 
 /**
@@ -30,6 +31,7 @@ import androidx.core.app.NotificationCompat
 class ScreenCaptureService : Service() {
 
     companion object {
+        private const val TAG = "SLK-Capture"
         private const val CHANNEL_ID = "capture_channel"
         private const val NOTIF_ID = 2
 
@@ -45,7 +47,9 @@ class ScreenCaptureService : Service() {
             lastResultCode = resultCode
             lastData = data
             val intent = Intent(context, ScreenCaptureService::class.java)
-            context.startForegroundService(intent)
+            // Android 12+ 后台启动前台服务会被拒；失败只放弃本次 OCR，不能拖垮进程
+            runCatching { context.startForegroundService(intent) }
+                .onFailure { Log.w(TAG, "startForegroundService failed: ${it.message}") }
         }
 
         fun hasPermission(): Boolean = lastData != null && lastResultCode != -1
@@ -64,7 +68,16 @@ class ScreenCaptureService : Service() {
                 ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION else 0)
         instance = this
         if (hasPermission()) {
-            projection = projectionManager.getMediaProjection(lastResultCode, lastData!!)
+            // Android 14 起 MediaProjection 令牌是一次性的：复用旧令牌会抛异常。
+            // 这里失败就作废令牌，下次走 OCR 时会重新拉起授权页。
+            projection = runCatching {
+                projectionManager.getMediaProjection(lastResultCode, lastData!!)
+            }.getOrElse {
+                Log.w(TAG, "getMediaProjection failed, token dropped: ${it.message}")
+                lastData = null
+                lastResultCode = -1
+                null
+            }
         }
     }
 
