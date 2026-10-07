@@ -1,0 +1,22 @@
+# Built application files
+*.apk
+*.aar
+*.jar
+*.class
+*.log
+
+# Gradle files
+.gradle/
+build/
+app/build/
+
+# Local configuration file (sdk dir, etc)
+local.properties
+
+# IDE / OS
+.idea/
+*.iml
+.DS_Store
+.externalNativeBuild/
+.cxx/
+captures/
