@@ -9,6 +9,8 @@
 .gradle/
 build/
 app/build/
+# 但必须保留 Gradle Wrapper（CI 靠它下载发行包）
+!gradle/wrapper/gradle-wrapper.jar
 
 # Local configuration file (sdk dir, etc)
 local.properties

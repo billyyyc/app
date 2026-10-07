@@ -2,19 +2,27 @@
 # 用法：
 #   1. 把整个 WeChatStudentLookup 目录推到 GitHub 私有仓库
 #   2. 仓库 → Settings → Actions → 允许运行
-#   3. 每次 push 到 main/master 会自动编译，或在 Actions 页点 "Run workflow" 手动触发
+#   3. 每次 push 到 main 会自动编译，或在 Actions 页点 "Run workflow" 手动触发
 #   4. 编译完成后在 Actions → Artifacts 下载 app-debug-apk.zip，解压即得 app-debug.apk
+#
+# 说明：GitHub 托管的 ubuntu runner 已预装 Android SDK（含 cmdline-tools/latest）
+#       并预接受了许可证；不再使用 android-actions/setup-android（其与新版
+#       cmdline-tools 不兼容，--licenses 会变成交互式导致 CI 卡死）。
 
 name: Build Debug APK
 
 on:
   push:
-    branches: [ main, master ]
+    branches: [ main ]
   workflow_dispatch:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    env:
+      ANDROID_HOME: /usr/local/lib/android/sdk
+      ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -25,20 +33,17 @@ jobs:
           distribution: temurin
           java-version: 17
 
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
+      - name: Accept Android SDK licenses
+        run: yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses || true
 
-      - name: Install SDK packages & accept licenses
-        run: |
-          yes | sdkmanager --licenses
-          sdkmanager "platforms;android-34" "build-tools;34.0.0" "platform-tools"
+      - name: Install Android SDK packages
+        run: $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager "platforms;android-34" "build-tools;34.0.0"
 
-      # 工程未内置 gradle wrapper jar，用 gradle-build-action 指定版本下载并构建
+      - name: Make gradlew executable
+        run: chmod +x ./gradlew
+
       - name: Build debug APK
-        uses: gradle/gradle-build-action@v3
-        with:
-          gradle-version: 8.7
-          arguments: assembleDebug
+        run: ./gradlew assembleDebug --no-daemon
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
