@@ -27,15 +27,23 @@ object OcrFallback {
      */
     suspend fun recognizeTop(context: Context): String? {
         if (!ScreenCaptureService.hasPermission()) {
-            context.startActivity(
-                Intent(context, com.example.studentlookup.ui.CapturePermissionActivity::class.java)
-                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            )
+            // Android 14 对后台启动 Activity 有限制，失败不应拖垮进程
+            runCatching {
+                context.startActivity(
+                    Intent(context, com.example.studentlookup.ui.CapturePermissionActivity::class.java)
+                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                )
+            }
             return null
         }
         val svc = ScreenCaptureService.instance ?: run {
-            // 服务未运行则重启
-            ScreenCaptureService.startWithPermission(context, ScreenCaptureService.lastResultCode, ScreenCaptureService.lastData!!)
+            // 服务未运行则重启；Android 14 对后台启动 mediaProjection 型 FGS 有限制，
+            // 失败只放弃本次 OCR，绝不能抛异常导致进程崩溃（会连带杀死无障碍服务）
+            runCatching {
+                ScreenCaptureService.lastData?.let {
+                    ScreenCaptureService.startWithPermission(context, ScreenCaptureService.lastResultCode, it)
+                }
+            }
             ScreenCaptureService.instance
         } ?: return null
 

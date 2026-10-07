@@ -31,11 +31,10 @@
             android:name=".ui.CapturePermissionActivity"
             android:exported="false" />
 
-        <!-- 悬浮球服务 -->
+        <!-- 悬浮球服务（仅悬浮视图，不做录屏，无需 mediaProjection 类型） -->
         <service
             android:name=".service.FloatingBallService"
-            android:exported="false"
-            android:foregroundServiceType="mediaProjection" />
+            android:exported="false" />
 
         <!-- 截屏采集服务（MediaProjection） -->
         <service

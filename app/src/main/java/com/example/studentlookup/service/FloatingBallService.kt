@@ -6,7 +6,6 @@ import android.app.NotificationManager
 import android.app.Service
 import android.content.Context
 import android.content.Intent
-import android.content.pm.ServiceInfo
 import android.graphics.PixelFormat
 import android.os.Build
 import android.os.Handler
@@ -47,8 +46,10 @@ class FloatingBallService : Service() {
         super.onCreate()
         wm = getSystemService(WINDOW_SERVICE) as WindowManager
         createChannel()
-        startForeground(NOTIF_ID, buildNotification(),
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION else 0)
+        // 悬浮球仅显示悬浮视图，不涉及录屏；Android 14 上以 mediaProjection 类型启动 FGS
+        // 若无有效录屏授权会抛 SecurityException 导致闪退（曾致进程崩溃、无障碍服务被判"无法运行"），
+        // 因此用无类型的两参 startForeground。
+        startForeground(NOTIF_ID, buildNotification())
         addBall()
         isRunning = true
     }
