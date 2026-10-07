@@ -83,11 +83,29 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun isAccessibilityEnabled(): Boolean {
-        val id = packageName + "/" + LookupAccessibilityService::class.java.canonicalName
-        val enabled = Settings.Secure.getString(
+        // 主判定：用系统 AccessibilityManager 标准 API（不受各 ROM 私有字符串格式影响）
+        val serviceName = LookupAccessibilityService::class.java.name
+        val enabledViaApi = runCatching {
+            val am = getSystemService(Context.ACCESSIBILITY_SERVICE) as android.view.accessibility.AccessibilityManager
+            am.getEnabledAccessibilityServiceList(
+                android.accessibilityservice.AccessibilityServiceInfo.FEEDBACK_ALL_MASK
+            ).any {
+                it.resolveInfo.serviceInfo.packageName == packageName &&
+                    it.resolveInfo.serviceInfo.name == serviceName
+            }
+        }.getOrDefault(false)
+        if (enabledViaApi) return true
+
+        // 兜底：解析系统安全设置字符串，宽松匹配（兼容 ColorOS 等把值存成不同格式的 ROM）
+        val simple = LookupAccessibilityService::class.java.simpleName
+        val raw = Settings.Secure.getString(
             contentResolver, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
         ) ?: return false
-        return enabled.split(":").any { it.equals(id, true) }
+        return raw.split(":").any {
+            it.equals("$packageName/$simple", true) ||
+                it.endsWith(".$simple", true) ||
+                it.equals(serviceName, true)
+        }
     }
 
     private fun startFloatingBall() {
