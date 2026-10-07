@@ -42,8 +42,9 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.3")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
 
-    // 本地数据库
+    // 本地数据库（room-ktx 提供 suspend/Flow 协程支持）
     implementation("androidx.room:room-runtime:2.6.1")
+    implementation("androidx.room:room-ktx:2.6.1")
     kapt("androidx.room:room-compiler:2.6.1")
 
     // 截图 OCR 兜底（中文模型，完全离线、不依赖 GMS，适合国产机）
