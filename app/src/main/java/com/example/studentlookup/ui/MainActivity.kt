@@ -117,7 +117,9 @@ class MainActivity : AppCompatActivity() {
                 binding.tvImportResult.text = msg
                 refreshDataInfo()
                 if (result.inserted == 0) {
-                    Toast.makeText(this@MainActivity, "导入失败，请检查表头是否含「姓名」列", Toast.LENGTH_LONG).show()
+                    // 失败时把具体原因带进 Toast，方便真机上直接定位
+                    val why = result.errors.firstOrNull() ?: "未读到任何数据（文件可能为空或损坏）"
+                    Toast.makeText(this@MainActivity, "导入失败：$why", Toast.LENGTH_LONG).show()
                 }
             }
         }
