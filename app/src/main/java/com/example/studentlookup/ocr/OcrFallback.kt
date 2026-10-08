@@ -50,7 +50,8 @@ object OcrFallback {
         context: Context,
         full: Bitmap,
         skipTopPx: Int,
-        maxHeightPx: Int
+        maxHeightPx: Int,
+        scales: List<Pair<String, Int>> = listOf("2x" to 2, "4x" to 4, "3x" to 3, "1x" to 1)
     ): List<String> {
         val top = skipTopPx.coerceIn(0, (full.height - 1).coerceAtLeast(0))
         val h = maxHeightPx.coerceIn(1, full.height - top)
@@ -61,7 +62,7 @@ object OcrFallback {
             return emptyList()
         }
         val variants = ArrayList<Pair<String, Bitmap>>()
-        for ((tag, scale) in listOf("2x" to 2, "4x" to 4, "3x" to 3, "1x" to 1)) {
+        for ((tag, scale) in scales) {
             val bmp = if (scale == 1) crop else runCatching {
                 Bitmap.createScaledBitmap(crop, crop.width * scale, crop.height * scale, true)
             }.getOrNull()

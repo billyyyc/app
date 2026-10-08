@@ -79,15 +79,22 @@ object Matcher {
 
     /** 按编辑距离给出候选（先按距离、再按共同字符数、最后按字典序） */
     fun candidates(base: String, all: List<Student>, limit: Int = MAX_SUGGESTIONS): List<String> =
+        rankSimilar(base, all, limit).map { it.first }
+
+    /** 候选 + 与输入串的编辑距离（越大越不像） */
+    fun rankSimilar(base: String, all: List<Student>, limit: Int = MAX_SUGGESTIONS): List<Pair<String, Int>> =
         all.asSequence()
             .map { NameNormalizer.normalize(it.name) }
             .filter { it.length >= 2 && abs(it.length - base.length) <= 1 }
             .distinct()
             .map { it to levenshtein(it, base) }
             .sortedWith(compareBy({ it.second }, { -shared(it.first, base) }, { it.first }))
-            .map { it.first }
             .take(limit)
             .toList()
+
+    /** 两个姓名的编辑距离（供外部判断"像不像"） */
+    fun distance(a: String, b: String): Int =
+        levenshtein(NameNormalizer.normalize(a), NameNormalizer.normalize(b))
 
     private fun build(
         rows: List<Student>,

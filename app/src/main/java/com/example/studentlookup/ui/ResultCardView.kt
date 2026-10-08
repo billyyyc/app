@@ -34,8 +34,12 @@ object ResultCardView {
     /** 表格一行：某个学期 + 该学期该生的记录（没有记录则为空行，灰色显示） */
     data class GridRow(val termClean: String, val seq: Int?, val student: Student?)
 
-    /** 多人对照表的一个学生：姓名 + 「学期 -> 记录」 */
-    data class MatrixStudent(val name: String, val byTerm: Map<String, Student>)
+    /** 多人对照表的一个学生：姓名 + 「学期 -> 记录」+ 是否为"按识别结果推断" */
+    data class MatrixStudent(
+        val name: String,
+        val byTerm: Map<String, Student>,
+        val approximate: Boolean = false
+    )
 
     /** 列顺序：客服最常问的「哪个班、谁带」放前面 */
     private val COLUMNS = listOf("期数", "学期", "班次", "老师", "年级", "学校", "手机")
@@ -65,7 +69,9 @@ object ResultCardView {
         onBack: (() -> Unit)? = null,
         grid: List<GridRow> = emptyList(),
         /** 边打字边查：输入停顿 250ms 后回调一次（不用按搜索就出候选） */
-        onLiveSearch: ((String) -> Unit)? = null
+        onLiveSearch: ((String) -> Unit)? = null,
+        /** 自定义标题（默认「查询：xxx」） */
+        title: String? = null
     ) {
         dismiss()
         val root = View.inflate(context, R.layout.result_card, null) as LinearLayout
@@ -83,7 +89,7 @@ object ResultCardView {
         currentStatus = tvStatus
         currentCopy = btnCopy
 
-        tvTitle.text = "查询：${result.query}"
+        tvTitle.text = title ?: "查询：${result.query}"
         if (prefill.isNotEmpty()) {
             etSearch.setText(prefill)
             etSearch.setSelection(prefill.length)
@@ -155,6 +161,11 @@ object ResultCardView {
     ) {
         container.removeAllViews()
         btnCopy?.visibility = View.GONE
+        // 空状态（刚打开手动搜索、还没输入）：不显示任何提示
+        if (result.query.isBlank() && !result.found && result.suggestions.isEmpty()) {
+            tvStatus.text = ""
+            return
+        }
         if (result.found) {
             when {
                 result.byName.size == 1 -> {
@@ -549,7 +560,7 @@ object ResultCardView {
         students.forEachIndexed { i, st ->
             val cells = ArrayList<String>()
             cells.add("${i + 1}")
-            cells.add(st.name)
+            cells.add(if (st.approximate) "≈ ${st.name}" else st.name)
             for (t in terms) {
                 val rec = st.byTerm[t]
                 cells.add(
@@ -624,39 +635,30 @@ object ResultCardView {
                 }
             }
             if (isNameCol && onPickName != null) {
-                tv.setOnClickListener { onPickName(text) }
+                tv.setOnClickListener { onPickName(text.removePrefix("≈ ").trim()) }
             }
             row.addView(tv)
         }
         return row
     }
 
-    fun showManualSearch(context: Context, initialText: String = "", onSearch: (String) -> Unit) {
-        dismiss()
-        val root = View.inflate(context, R.layout.result_card, null) as LinearLayout
-        val tvTitle = root.findViewById<TextView>(R.id.tv_title)
-        val container = root.findViewById<LinearLayout>(R.id.container_students)
-        val etSearch = root.findViewById<EditText>(R.id.et_search)
-        val btnSearch = root.findViewById<Button>(R.id.btn_search)
-        val btnClose = root.findViewById<Button>(R.id.btn_close)
-        val btnBack = root.findViewById<Button>(R.id.btn_back)
-        btnBack.visibility = View.GONE
-        root.findViewById<Button>(R.id.btn_copy).visibility = View.GONE
-        root.findViewById<TextView>(R.id.tv_status).visibility = View.GONE
-        tvTitle.text = "手动搜索"
-        container.visibility = View.GONE
-        btnSearch.text = "搜索"
-        if (initialText.isNotEmpty()) {
-            etSearch.setText(initialText)
-            etSearch.setSelection(initialText.length)
-        }
-        btnSearch.setOnClickListener {
-            val q = etSearch.text.toString().trim()
-            if (q.isNotEmpty()) onSearch(q)
-        }
-        btnClose.setOnClickListener { dismiss() }
-        addOverlay(context, root)
-        current = root
+    /**
+     * 手动搜索：与结果卡同一套界面，**边打字边出候选**（输入框下面直接列名字，点一下看记录）。
+     */
+    fun showManualSearch(
+        context: Context,
+        initialText: String = "",
+        onSearch: (String) -> Unit,
+        onLiveSearch: ((String) -> Unit)? = null
+    ) {
+        show(
+            context = context,
+            result = Matcher.MatchResult(false, false, "", emptyMap(), emptyList()),
+            onManualSearch = onSearch,
+            prefill = initialText,
+            onLiveSearch = onLiveSearch,
+            title = "搜索学员"
+        )
     }
 
     fun dismiss() {

@@ -380,25 +380,36 @@ class FloatingBallService : Service() {
         // （本机实测微信完全不向无障碍暴露控件树，所以这条路径就是微信里的唯一自动识别方式。）
         val acc = LookupAccessibilityService.instance
         if (acc != null && acc.canTakeScreenshotNow()) {
-            toast("正在识别微信标题…")
+            // 先给一张看得见的"识别中"卡片：识别要 1~3 秒，只弹 toast 用户会以为没反应
+            ResultCardView.showNotice(
+                this, "正在识别微信标题…", "正在截图识别，请稍候（约 1~3 秒）",
+                listOf("改成手动搜索" to { showManualSearch() })
+            )
             CoroutineScope(Dispatchers.Main).launch {
                 val skip = acc.statusBarHeightPx()
-                // 抓两帧 + 每帧多种放大倍率：候选更多，再用学员库挑最可信的一条
                 val candidates = LinkedHashSet<String>()
                 var captured = false
-                repeat(2) { frame ->
+                var scored = 0
+                // 第一帧只用 2x/4x（快）；若在学员库里一无所获，再抓一帧补 3x/1x
+                val plans = listOf(listOf("2x" to 2, "4x" to 4), listOf("3x" to 3, "1x" to 1))
+                for ((frame, plan) in plans.withIndex()) {
                     val full = acc.captureScreen()
                     if (full != null) {
                         captured = true
                         val list = kotlinx.coroutines.withContext(Dispatchers.IO) {
                             OcrFallback.titleCandidates(
-                                this@FloatingBallService, full, skip, (skip * 1.2f).toInt()
+                                this@FloatingBallService, full, skip, (skip * 1.2f).toInt(), plan
                             )
                         }
                         candidates.addAll(list)
                         runCatching { full.recycle() }
+                        scored = kotlinx.coroutines.withContext(Dispatchers.IO) {
+                            val all = allStudents()
+                            candidates.maxOfOrNull { scoreText(it, all) } ?: 0
+                        }
                     }
-                    if (frame == 0) delay(220)
+                    if (scored > 0) break
+                    if (frame == 0) delay(180)
                 }
                 if (!captured || candidates.isEmpty()) {
                     Diag.log(this@FloatingBallService, "Ball", "无障碍截屏失败/无候选 → 转手动搜索")
@@ -471,7 +482,11 @@ class FloatingBallService : Service() {
     }
 
     private fun showManualSearch() {
-        ResultCardView.showManualSearch(this) { q -> query(q) }
+        ResultCardView.showManualSearch(
+            this,
+            onSearch = { q -> query(q) },
+            onLiveSearch = { text -> liveQuery(text) }
+        )
     }
 
     /**
@@ -490,12 +505,21 @@ class FloatingBallService : Service() {
             val fixes = fixMap()
             val hits = LinkedHashSet<String>()
             val unresolved = ArrayList<String>()
+            // 近似命中的：学生名 -> OCR 原文片段（点名字确认后就记住 / 学会字形纠正）
+            val approx = HashMap<String, String>()
             for (seg in segs) {
                 // 先查纠正记忆，再用学到的字形纠正
                 val resolved = fixes[seg] ?: applyCharFixes(seg)
                 val r = Matcher.match(resolved, all)
                 if (r.found && !r.approximate && r.byName.size == 1) {
                     hits.add(r.byName.keys.first())
+                    continue
+                }
+                // 认不准的：用学员库找最像的（三个字里错一个 → 距离 1），作为「待确认」候选给出
+                val top = Matcher.rankSimilar(resolved, all, 1).firstOrNull()
+                if (top != null && top.second <= 1 && top.first.length == resolved.length) {
+                    hits.add(top.first)
+                    approx[top.first] = seg
                 } else if (fixes[seg] == null) {
                     unresolved.add(seg)
                 }
@@ -524,16 +548,25 @@ class FloatingBallService : Service() {
                         ResultCardView.MatrixStudent(
                             name = n,
                             byTerm = rs.groupBy { TermUtils.clean(it.term) }
-                                .mapValues { it.value.first() }
+                                .mapValues { it.value.first() },
+                            approximate = approx.containsKey(n)
                         )
                     }
                     .sortedBy { it.name }
                 ResultCardView.showMatrix(
                     this@FloatingBallService,
-                    title = "识别到 ${students.size} 个孩子（点姓名看详情）",
+                    title = "识别到 ${students.size} 个孩子" +
+                        if (approx.isEmpty()) "（点姓名看详情）" else "（≈ 为按识别结果推断，点姓名确认）",
                     terms = terms,
                     students = students,
-                    onPickName = { n -> picked(n) },
+                    onPickName = { n ->
+                        // 用户确认了近似结果 → 永久记住，并学会字形纠正（钛→铱）
+                        approx[n]?.let { seg ->
+                            rememberFix(seg, n)
+                            toast("已记住：$seg → $n")
+                        }
+                        picked(n)
+                    },
                     onBack = backAction()
                 )
             }
@@ -543,11 +576,16 @@ class FloatingBallService : Service() {
     /** 纠正某个认不准的片段：预填到手动搜索框，改好后搜索即被记住 */
     private fun startCorrection(segment: String) {
         Diag.log(this, "Ball", "纠正片段：$segment")
-        ResultCardView.showManualSearch(this, initialText = segment) { typed ->
-            rememberFix(segment, typed)
-            toast("已记住：$segment → $typed")
-            picked(typed)
-        }
+        ResultCardView.showManualSearch(
+            this,
+            initialText = segment,
+            onSearch = { typed ->
+                rememberFix(segment, typed)
+                toast("已记住：$segment → $typed")
+                picked(typed)
+            },
+            onLiveSearch = { text -> liveQuery(text) }
+        )
     }
 
     private fun notifyCard(title: String, message: String, actions: List<Pair<String, () -> Unit>>) {
@@ -691,6 +729,16 @@ class FloatingBallService : Service() {
                 !r.approximate -> 2
                 else -> 1
             }
+            // 没命中也要看"像不像库里某个名字"：这样多个 OCR 变体之间能挑出更靠谱的一条
+            if (!r.found) {
+                val d = Matcher.rankSimilar(seg, all, 1).firstOrNull()?.second
+                score += when {
+                    d == null -> 0
+                    d <= 1 -> 2
+                    d == 2 -> 1
+                    else -> 0
+                }
+            }
         }
         return score
     }
@@ -803,7 +851,7 @@ class FloatingBallService : Service() {
     private fun showMenu() {
         ResultCardView.showMenu(this) {
             when (it) {
-                MenuAction.MANUAL -> ResultCardView.showManualSearch(this) { q -> query(q) }
+                MenuAction.MANUAL -> showManualSearch()
                 MenuAction.BALL_STYLE -> showBallStylePicker()
                 MenuAction.REFRESH -> toast("数据已在导入时更新，无需刷新")
                 MenuAction.HIDE -> {
