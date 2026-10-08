@@ -14,6 +14,11 @@ android {
         targetSdk = 34
         versionCode = 1
         versionName = "1.0"
+        // 只保留手机实际用到的架构：ONNX Runtime 自带 4 种 ABI 的原生库，
+        // 不限制的话 APK 会从 44MB 涨到 128MB
+        ndk {
+            abiFilters += listOf("arm64-v8a", "armeabi-v7a")
+        }
     }
 
     // 固定签名（关键）：GitHub Actions 每次新建的随机 debug keystore 会让 APK 签名变化，

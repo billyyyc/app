@@ -67,13 +67,6 @@ object OcrFallback {
         val t0 = System.currentTimeMillis()
         // 先用本地 PP-OCRv4（B 方案）识别一次：它专门为中文优化，生僻人名通常比 ML Kit 准
         val out0 = ArrayList<String>()
-        runCatching {
-            if (PaddleOcr.init(context)) {
-                val tp = System.currentTimeMillis()
-                PaddleOcr.recognize(crop)?.let { out0.add(it) }
-                Diag.log(context, "OCR", "PP-OCR 结果=${out0.firstOrNull() ?: "（空）"} 用时${System.currentTimeMillis() - tp}ms")
-            }
-        }
         val variants = ArrayList<Pair<String, Bitmap>>()
         for ((tag, scale) in scales) {
             // 太大的图 ML Kit 会明显变慢（用户反馈"说 1~3 秒，有时远不止"），这里直接跳过
@@ -87,17 +80,42 @@ object OcrFallback {
             if (bmp != null) variants.add(tag to bmp)
         }
         val out = ArrayList<String>(out0)
+        var lineBox: android.graphics.Rect? = null
+        var boxScale = 1
         for ((tag, bmp) in variants) {
-            bestLines(context, bmp, tag).forEach { if (!out.contains(it)) out.add(it) }
+            val (lines, box) = bestLines(context, bmp, tag)
+            if (lineBox == null && box != null) {
+                lineBox = box
+                boxScale = if (bmp === crop) 1 else (bmp.width / crop.width)
+            }
+            lines.forEach { if (!out.contains(it)) out.add(it) }
             if (bmp !== crop) runCatching { bmp.recycle() }
+        }
+        // PP-OCR 需要"文字占满高度"：按 ML Kit 找到的文字行框紧裁后再识别
+        runCatching {
+            if (PaddleOcr.init(context) && lineBox != null) {
+                val b = lineBox!!
+                val pad = (b.height() * 0.25f).toInt()
+                val left = (b.left / boxScale - pad).coerceAtLeast(0)
+                val t = (b.top / boxScale - pad).coerceAtLeast(0)
+                val r = (b.right / boxScale + pad).coerceAtMost(crop.width)
+                val bo = (b.bottom / boxScale + pad).coerceAtMost(crop.height)
+                if (r - left > 8 && bo - t > 8) {
+                    val tight = Bitmap.createBitmap(crop, left, t, r - left, bo - t)
+                    val tp = System.currentTimeMillis()
+                    val txt = PaddleOcr.recognize(tight)
+                    Diag.log(context, "OCR", "PP-OCR(紧裁 ${tight.width}x${tight.height}) 结果=${txt ?: "（空）"} 用时${System.currentTimeMillis() - tp}ms")
+                    if (!txt.isNullOrBlank() && !out.contains(txt)) out.add(0, txt)
+                }
+            }
         }
         Diag.log(context, "OCR", "本次识别耗时 ${System.currentTimeMillis() - t0}ms（${variants.size} 个倍率）")
         return out
     }
 
-    /** 单次识别取前几行（含逗号的多段优先） */
-    private suspend fun bestLines(context: Context, bmp: Bitmap, tag: String): List<String> {
-        val text = recognize(bmp) ?: return emptyList()
+    /** 单次识别取前几行（含逗号的多段优先），同时返回最上面一行的框（用于给 PP-OCR 做紧裁剪） */
+    private suspend fun bestLines(context: Context, bmp: Bitmap, tag: String): Pair<List<String>, android.graphics.Rect?> {
+        val text = recognize(bmp) ?: return emptyList<String>() to null
         val lines = text.textBlocks
             .flatMap { it.lines }
             .sortedBy { it.boundingBox?.top ?: 0 }
@@ -108,7 +126,9 @@ object OcrFallback {
         lines.firstOrNull { (it.contains(',') || it.contains('，')) && it.length >= 4 }?.let { out.add(it) }
         lines.filter { looksLikeName(it) }.forEach { if (!out.contains(it)) out.add(it) }
         if (out.isEmpty() && lines.isNotEmpty()) out.add(lines.first())
-        return out.take(3)
+        val box = text.textBlocks.flatMap { it.lines }
+            .minByOrNull { it.boundingBox?.top ?: Int.MAX_VALUE }?.boundingBox
+        return out.take(3) to box
     }
 
     /**
