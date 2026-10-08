@@ -79,6 +79,13 @@
             android:text="授权截图识别（可选兜底）" />
 
         <Button
+            android:id="@+id/btn_battery"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:text="加入省电白名单（防止后台被清理）" />
+
+        <Button
             android:id="@+id/btn_start"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"

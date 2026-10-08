@@ -9,6 +9,7 @@ import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.PowerManager
 import android.provider.Settings
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
@@ -35,6 +36,9 @@ class MainActivity : AppCompatActivity() {
 
     private lateinit var binding: ActivityMainBinding
     private val prefs by lazy { getSharedPreferences("app_state", Context.MODE_PRIVATE) }
+
+    /** 本次进程内是否已尝试过「自动重连无障碍」，避免反复折腾系统设置 */
+    private var autoRepairTried = false
 
     private val importLauncher = registerForActivityResult(
         ActivityResultContracts.OpenDocument()
@@ -74,6 +78,7 @@ class MainActivity : AppCompatActivity() {
             ).show()
             startActivity(Intent(this, CapturePermissionActivity::class.java))
         }
+        binding.btnBattery.setOnClickListener { requestBatteryWhitelist() }
         binding.btnDiagCopy.setOnClickListener {
             val text = Diag.text(this, 60)
             val cm = getSystemService(CLIPBOARD_SERVICE) as ClipboardManager
@@ -88,6 +93,16 @@ class MainActivity : AppCompatActivity() {
 
         Diag.log(this, "App", "打开首页")
         refreshDataInfo()
+
+        // 进程被系统清掉后，悬浮球会跟着消失；这里按上次状态自动恢复，
+        // 也让 App 立刻回到「前台服务常驻」的状态，避免再次被清理。
+        if (prefs.getBoolean("ball_should_run", false) &&
+            !FloatingBallService.isRunning &&
+            Settings.canDrawOverlays(this)
+        ) {
+            Diag.log(this, "App", "检测到悬浮球此前处于运行状态，自动恢复")
+            startFloatingBall(quiet = true)
+        }
     }
 
     override fun onResume() {
@@ -96,6 +111,56 @@ class MainActivity : AppCompatActivity() {
         // 刚回到前台时无障碍服务可能还在重连，稍后再确认一次，避免误报「未连接」
         binding.root.postDelayed({ updatePermissionStatus() }, 900)
         refreshDiag()
+        maybeAutoRepair()
+    }
+
+    /**
+     * 自动重连：ColorOS 清掉 App 进程后，无障碍服务常处于「开关还开着、但没绑上」的假死态。
+     * 以前需要用户手动「关→开」，现在只要 App 能拿到 WRITE_SECURE_SETTINGS，就自动重绑一次。
+     */
+    private fun maybeAutoRepair() {
+        if (autoRepairTried) return
+        if (!AccessibilitySupport.isEnabled(this)) return
+        if (AccessibilitySupport.isConnected()) return
+        autoRepairTried = true
+        if (!AccessibilitySupport.canSelfRepair(this)) {
+            Diag.log(this, "App", "无障碍已开启但未连接；且当前无自愈权限（需要一次性 adb 授权）")
+            return
+        }
+        Diag.log(this, "App", "无障碍已开启但未连接 → 自动重新绑定")
+        CoroutineScope(Dispatchers.Main).launch {
+            AccessibilitySupport.rebind(this@MainActivity)
+            delay(1800)
+            val ok = AccessibilitySupport.isConnected()
+            updatePermissionStatus()
+            Diag.log(this@MainActivity, "App", "自动重绑结果：已连接=$ok")
+            Toast.makeText(
+                this@MainActivity,
+                if (ok) "已自动重新连接无障碍服务 ✅"
+                else "自动重连没成功，请点「修复无障碍连接」或去系统设置把本服务关→开一次",
+                Toast.LENGTH_LONG
+            ).show()
+        }
+    }
+
+    /** 把 App 加入电池优化白名单——OPPO/ColorOS 上这是防止进程被清掉的关键一步。 */
+    private fun requestBatteryWhitelist() {
+        val pm = getSystemService(POWER_SERVICE) as PowerManager
+        if (pm.isIgnoringBatteryOptimizations(packageName)) {
+            Toast.makeText(this, "已经在省电白名单里了 ✅", Toast.LENGTH_SHORT).show()
+            return
+        }
+        val launched = runCatching {
+            startActivity(
+                Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS)
+                    .setData(Uri.parse("package:$packageName"))
+            )
+        }.isSuccess
+        if (!launched) {
+            runCatching {
+                startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
+            }
+        }
     }
 
     private fun refreshDiag() {
@@ -165,13 +230,18 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun startFloatingBall() {
+    private fun startFloatingBall(quiet: Boolean = false) {
         if (FloatingBallService.isRunning) {
-            Toast.makeText(this, "悬浮球已在运行", Toast.LENGTH_SHORT).show()
+            if (!quiet) Toast.makeText(this, "悬浮球已在运行", Toast.LENGTH_SHORT).show()
             return
         }
         startService(Intent(this, FloatingBallService::class.java))
-        Toast.makeText(this, "悬浮球已启动，去微信对话里点它", Toast.LENGTH_SHORT).show()
+        Diag.log(this, "App", if (quiet) "自动恢复悬浮球" else "启动悬浮球")
+        Toast.makeText(
+            this,
+            "悬浮球已启动。请让它的通知常驻（别在后台顺手清掉本应用），再到微信里点它",
+            Toast.LENGTH_LONG
+        ).show()
     }
 
     private fun doImport(uri: Uri) {

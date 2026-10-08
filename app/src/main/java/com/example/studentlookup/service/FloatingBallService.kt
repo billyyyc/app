@@ -57,13 +57,33 @@ class FloatingBallService : Service() {
         startForeground(NOTIF_ID, buildNotification())
         addBall()
         isRunning = true
+        // 记住「用户希望悬浮球开着」，进程被系统清掉后下次打开 App 能自动恢复
+        getSharedPreferences("app_state", MODE_PRIVATE)
+            .edit().putBoolean("ball_should_run", true).apply()
+        // 启动悬浮球时顺手自愈：ColorOS 清掉进程后无障碍常处于「开着但没绑上」的状态
+        CoroutineScope(Dispatchers.Main).launch {
+            if (AccessibilitySupport.isEnabled(this@FloatingBallService) &&
+                LookupAccessibilityService.instance == null
+            ) {
+                if (AccessibilitySupport.canSelfRepair(this@FloatingBallService)) {
+                    Diag.log(this@FloatingBallService, "Ball", "启动时发现无障碍未连接 → 自动重绑")
+                    AccessibilitySupport.rebind(this@FloatingBallService)
+                } else {
+                    Diag.log(this@FloatingBallService, "Ball", "启动时发现无障碍未连接，且无自愈权限")
+                }
+            }
+        }
     }
 
     override fun onDestroy() {
         if (::ball.isInitialized) wm.removeView(ball)
         isRunning = false
+        getSharedPreferences("app_state", MODE_PRIVATE)
+            .edit().putBoolean("ball_should_run", false).apply()
         super.onDestroy()
     }
+
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int = START_STICKY
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -82,7 +102,14 @@ class FloatingBallService : Service() {
         ball.setOnTouchListener(DragListener())
         ball.setOnClickListener { onBallClick() }
         ball.setOnLongClickListener { showMenu(); true }
-        wm.addView(ball, params)
+        // 悬浮窗权限被系统收回时，addView 会抛异常；这里兜住，绝不因此崩溃
+        try {
+            wm.addView(ball, params)
+        } catch (t: Throwable) {
+            Diag.log(this, "Ball", "悬浮球无法显示：${t.javaClass.simpleName} ${t.message}")
+            toast("悬浮球无法显示：请到系统设置里打开「悬浮窗」权限")
+            stopSelf()
+        }
     }
 
     private fun onBallClick() {
