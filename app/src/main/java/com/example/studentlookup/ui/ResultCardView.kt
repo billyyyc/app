@@ -476,6 +476,7 @@ object ResultCardView {
             "手动搜索" to MenuAction.MANUAL,
             "更换悬浮球样式" to MenuAction.BALL_STYLE,
             "刷新数据" to MenuAction.REFRESH,
+            "清空识别纠正记忆" to MenuAction.CLEAR_FIX,
             "隐藏悬浮球" to MenuAction.HIDE,
             "设置/权限" to MenuAction.SETTINGS
         )
@@ -815,4 +816,4 @@ object ResultCardView {
         (v * context.resources.displayMetrics.density + 0.5f).toInt()
 }
 
-enum class MenuAction { MANUAL, BALL_STYLE, REFRESH, HIDE, SETTINGS }
+enum class MenuAction { MANUAL, BALL_STYLE, REFRESH, CLEAR_FIX, HIDE, SETTINGS }

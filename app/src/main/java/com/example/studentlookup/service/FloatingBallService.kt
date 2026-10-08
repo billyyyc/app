@@ -202,6 +202,8 @@ class FloatingBallService : Service() {
 
     private fun appPrefs() = getSharedPreferences("app_state", MODE_PRIVATE)
 
+    private fun prefs() = appPrefs()
+
     private fun ballStyle(): BallStyle =
         BallStyle.entries.getOrElse(appPrefs().getInt("ball_style", 0)) { BallStyle.RING }
 
@@ -430,10 +432,7 @@ class FloatingBallService : Service() {
                 }
                 val best = kotlinx.coroutines.withContext(Dispatchers.IO) {
                     val all = allStudents()
-                    val raw = candidates.maxByOrNull { scoreText(it, all) } ?: candidates.first()
-                    // 用学到的字形纠正再试一次，谁在库里对得上就用谁
-                    val fixed = applyCharFixes(raw)
-                    if (fixed != raw && scoreText(fixed, all) > scoreText(raw, all)) fixed else raw
+                    candidates.maxByOrNull { scoreText(it, all) } ?: candidates.first()
                 }
                 Diag.log(
                     this@FloatingBallService, "Ball",
@@ -516,8 +515,8 @@ class FloatingBallService : Service() {
             // 近似命中的：学生名 -> OCR 原文片段（点名字确认后就记住 / 学会字形纠正）
             val approx = HashMap<String, String>()
             for (seg in segs) {
-                // 先查纠正记忆，再用学到的字形纠正
-                val resolved = fixes[seg] ?: applyCharFixes(seg)
+                // 只用纠正记忆（整段->正确姓名），不再做全局字形替换（会自我污染）
+                val resolved = fixes[seg] ?: seg
                 val r = Matcher.match(resolved, all)
                 if (r.found && !r.approximate && r.byName.size == 1) {
                     hits.add(r.byName.keys.first())
@@ -526,8 +525,21 @@ class FloatingBallService : Service() {
                 // 认不准的：用学员库找最像的（三个字里错一个 → 距离 1），作为「待确认」候选给出。
                 // 关键：要跳过"本轮已经用掉的姓名"——否则像 叶莞宜 这种情况，
                 // 最像的 叶沛宜(距离1) 会先被选中（可它已经对应第一个孩子），第三个孩子就被丢掉。
-                val pick = Matcher.rankSimilar(resolved, all, 6)
-                    .firstOrNull { it.second <= 1 && it.first.length == resolved.length && it.first !in hits }
+                // 同一家长的孩子常共用「姓+辈分字」（陈钇禾/陈钇可），已有命中时优先同前缀
+                val anchor = hits.firstOrNull()?.take(2)
+                // 先按「同前缀」直接在全库里筛（不受候选榜前几名限制，否则 陈钇可 会被挤掉）
+                val pick = if (anchor != null) {
+                    all.asSequence()
+                        .map { NameNormalizer.normalize(it.name) }
+                        .filter { it.startsWith(anchor) }
+                        .distinct()
+                        .map { it to Matcher.distance(it, resolved) }
+                        .filter { it.second <= 1 && it.first.length == resolved.length && it.first !in hits }
+                        .sortedWith(compareBy({ it.second }, { it.first }))
+                        .firstOrNull()
+                } else null
+                    ?: Matcher.rankSimilar(resolved, all, 20)
+                        .firstOrNull { it.second <= 1 && it.first.length == resolved.length && it.first !in hits }
                 if (pick != null) {
                     hits.add(pick.first)
                     approx[pick.first] = seg
@@ -613,7 +625,22 @@ class FloatingBallService : Service() {
     /** 用户点了卡片上的东西（候选/搜索/纠正）→ 记录当前状态，便于「返回」 */
     private fun picked(newRaw: String, newFromOcr: Boolean = false) {
         Diag.log(this, "Ball", "点选：$newRaw")
+        // 卡片来自识别结果时，用户手动打的这个名字就是对识别的纠正 → 记下来
+        // （只按"整段 → 正确姓名"记，不再做全局字形替换，避免自我污染）
+        currentQ?.takeIf { it.fromOcr }?.let { learnFromCorrection(it.raw, newRaw) }
         query(newRaw, newFromOcr, "", push = true)
+    }
+
+    /** 从「识别原文 + 用户改成什么」学一条：选与改后姓名最像、且尚未记过的片段 */
+    private fun learnFromCorrection(ocrText: String, correctedRaw: String) {
+        val name = NameNormalizer.normalize(correctedRaw)
+        if (name.length < 2) return
+        val segs = splitSegments(ocrText)
+        if (segs.isEmpty() || segs.any { it == name }) return
+        val fixes = fixMap()
+        val target = segs.filter { fixes[it] == null }.minByOrNull { Matcher.distance(it, name) }
+            ?: return
+        rememberFix(target, correctedRaw)
     }
 
     private fun backAction(): (() -> Unit)? {
@@ -739,8 +766,7 @@ class FloatingBallService : Service() {
 
     /** 用学员库给 OCR 候选打分：能精确命中库里的姓名，说明这段识别更可信 */
     private fun scoreAgainstDb(text: String, all: List<Student>): Int {
-        // 原始与「字形纠正后」取高分
-        return maxOf(scoreText(text, all), scoreText(applyCharFixes(text), all))
+        return scoreText(text, all)
     }
 
     private fun scoreText(text: String, all: List<Student>): Int {
@@ -798,55 +824,20 @@ class FloatingBallService : Service() {
             .split('\n')
             .filter { it.contains('=') }
             .associate { it.substringBefore('=') to it.substringAfter('=') }
+            // 只保留"改写型"记忆：相同的不留、长度差太多的（明显学歪了）丢掉
+            .filter { (k, v) -> k != v && kotlin.math.abs(k.length - v.length) <= 1 }
 
     private fun rememberFix(rawOcr: String, name: String) {
+        val clean = name.trim()
+        if (rawOcr.isBlank() || clean.isBlank() || rawOcr == clean) return
         val m = fixMap().toMutableMap()
-        m[rawOcr] = name
+        m[rawOcr] = clean
         getSharedPreferences("app_state", MODE_PRIVATE).edit()
             .putString("ocr_fix", m.entries.joinToString("\n") { "${it.key}=${it.value}" })
             .apply()
-        learnCharFixes(rawOcr, name)
-        Diag.log(this, "OCR", "记住纠正：$rawOcr -> $name")
+        Diag.log(this, "OCR", "记住纠正：$rawOcr -> $clean")
     }
 
-    // ---- 字形自学习：改正过的错字，以后自动换回来 ----
-
-    private fun prefs() = getSharedPreferences("app_state", MODE_PRIVATE)
-
-    private fun charFixMap(): Map<Char, Char> =
-        prefs().getString("ocr_char_fix", "").orEmpty()
-            .split('\n')
-            .filter { it.length >= 3 && it[1] == '=' }
-            .associate { it[0] to it[2] }
-
-    /**
-     * 从「认错的名字 → 正确的名字」里学字形对应关系。
-     * 例：陈恰形 → 陈怡彤 就记住 恰→怡、形→彤；下次再认成 卢恰彤/卢映形 也能自动改对。
-     */
-    private fun learnCharFixes(wrong: String, right: String) {
-        if (wrong.length != right.length || wrong == right) return
-        val m = charFixMap().toMutableMap()
-        var n = 0
-        for (i in wrong.indices) {
-            if (wrong[i] != right[i]) {
-                m[wrong[i]] = right[i]
-                n++
-            }
-        }
-        if (n == 0) return
-        prefs().edit()
-            .putString("ocr_char_fix", m.entries.joinToString("\n") { "${it.key}=${it.value}" })
-            .apply()
-        Diag.log(this, "OCR", "学会字形纠正：${m.entries.joinToString(" ") { "${it.key}→${it.value}" }}")
-    }
-
-    /** 用学到的错字表把识别结果换一遍 */
-    private fun applyCharFixes(s: String): String {
-        val m = charFixMap()
-        if (m.isEmpty()) return s
-        val out = buildString { for (c in s) append(m[c] ?: c) }
-        return out
-    }
 
     /**
      * 一个家长可能有多个孩子：用手机号归组，把「同一家长的其他孩子」一并列出来，
@@ -880,6 +871,11 @@ class FloatingBallService : Service() {
                 MenuAction.MANUAL -> showManualSearch()
                 MenuAction.BALL_STYLE -> showBallStylePicker()
                 MenuAction.REFRESH -> toast("数据已在导入时更新，无需刷新")
+                MenuAction.CLEAR_FIX -> {
+                    appPrefs().edit().remove("ocr_fix").remove("ocr_char_fix").apply()
+                    toast("已清空识别纠正记忆，下次重新学")
+                    Diag.log(this, "OCR", "用户清空纠正记忆")
+                }
                 MenuAction.HIDE -> {
                     // 明确记住「是用户自己要隐藏的」，否则下次打开 App 会自动又冒出来
                     getSharedPreferences("app_state", MODE_PRIVATE)

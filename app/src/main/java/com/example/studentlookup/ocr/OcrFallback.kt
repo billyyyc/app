@@ -55,14 +55,23 @@ object OcrFallback {
     ): List<String> {
         val top = skipTopPx.coerceIn(0, (full.height - 1).coerceAtLeast(0))
         val h = maxHeightPx.coerceIn(1, full.height - top)
+        // 横向只取中间 72%：会话标题在中间，两侧是按钮/图标；既去掉噪声也缩小图片（识别更快）
+        val x = (full.width * 0.14f).toInt().coerceIn(0, (full.width - 1).coerceAtLeast(0))
+        val w = (full.width * 0.72f).toInt().coerceIn(1, full.width - x)
         val crop = try {
-            Bitmap.createBitmap(full, 0, top, full.width, h)
+            Bitmap.createBitmap(full, x, top, w, h)
         } catch (t: Throwable) {
             android.util.Log.w("SLK-OCR", "裁剪失败：${t.message}")
             return emptyList()
         }
+        val t0 = System.currentTimeMillis()
         val variants = ArrayList<Pair<String, Bitmap>>()
         for ((tag, scale) in scales) {
+            // 太大的图 ML Kit 会明显变慢（用户反馈"说 1~3 秒，有时远不止"），这里直接跳过
+            if (w.toLong() * scale * (h.toLong() * scale) > 1_600_000L) {
+                Diag.log(context, "OCR", "[$tag] 跳过：放大后图片过大")
+                continue
+            }
             val bmp = if (scale == 1) crop else runCatching {
                 Bitmap.createScaledBitmap(crop, crop.width * scale, crop.height * scale, true)
             }.getOrNull()
@@ -73,6 +82,7 @@ object OcrFallback {
             bestLines(context, bmp, tag).forEach { if (!out.contains(it)) out.add(it) }
             if (bmp !== crop) runCatching { bmp.recycle() }
         }
+        Diag.log(context, "OCR", "本次识别耗时 ${System.currentTimeMillis() - t0}ms（${variants.size} 个倍率）")
         return out
     }
 
