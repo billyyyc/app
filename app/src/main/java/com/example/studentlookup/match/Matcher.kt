@@ -95,7 +95,13 @@ object Matcher {
         query: String,
         suggestions: List<String> = emptyList()
     ): MatchResult {
-        val byName = rows.groupBy { it.name }
+        // 按「归一化姓名」合并：数据库里同一个人可能写成「陈洽」和「陈 洽」，
+        // 不合并的话会当成两个结果，点哪个都查出同样的东西（用户会以为点了没反应）。
+        val byName = LinkedHashMap<String, MutableList<Student>>()
+        for (r in rows) {
+            val key = NameNormalizer.normalize(r.name).ifEmpty { r.name.trim() }
+            byName.getOrPut(key) { mutableListOf() }.add(r)
+        }
         return MatchResult(true, approximate, query, byName, suggestions)
     }
 

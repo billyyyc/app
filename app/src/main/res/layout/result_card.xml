@@ -29,6 +29,38 @@
             android:textSize="17sp"
             android:textStyle="bold" />
 
+        <TextView
+            android:id="@+id/tv_status"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="6dp"
+            android:textSize="13sp" />
+
+        <!-- 输入框放最上面：键盘在屏幕底部，永远挡不到它 -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="6dp"
+            android:orientation="horizontal">
+
+            <EditText
+                android:id="@+id/et_search"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:hint="识别不准？这里直接改了再搜"
+                android:inputType="text"
+                android:maxLines="1"
+                android:textSize="15sp" />
+
+            <Button
+                android:id="@+id/btn_search"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:minWidth="72dp"
+                android:text="搜索" />
+        </LinearLayout>
+
         <ScrollView
             android:id="@+id/scroll_body"
             android:layout_width="match_parent"
@@ -44,23 +76,6 @@
                 android:orientation="vertical" />
         </ScrollView>
 
-        <TextView
-            android:id="@+id/tv_status"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="6dp"
-            android:textSize="13sp" />
-
-        <EditText
-            android:id="@+id/et_search"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="6dp"
-            android:hint="识别不准？这里可以直接改，改完点搜索"
-            android:inputType="text"
-            android:maxLines="1"
-            android:textSize="15sp" />
-
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
@@ -74,13 +89,6 @@
                 android:layout_weight="1"
                 android:text="← 返回"
                 android:visibility="gone" />
-
-            <Button
-                android:id="@+id/btn_search"
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_weight="1"
-                android:text="搜索" />
 
             <Button
                 android:id="@+id/btn_copy"
