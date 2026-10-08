@@ -9,8 +9,8 @@
     android:background="#66000000"
     android:gravity="top|center_horizontal"
     android:orientation="vertical"
-    android:paddingTop="40dp"
-    android:paddingBottom="24dp">
+    android:paddingTop="60dp"
+    android:paddingBottom="60dp"><!--24dp-->
 
     <LinearLayout
         android:id="@+id/card_root"

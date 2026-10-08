@@ -275,10 +275,9 @@ class FloatingBallService : Service() {
                         "事件包名=${acc.currentPackage ?: "null"}）"
                 )
                 notifyCard(
-                    "当前不在微信对话界面",
-                    "请先打开要查询的学员/家长的微信聊天窗口，再点悬浮球。\n" +
-                        "也可以直接在这里手动搜索姓名。",
-                    listOf("手动搜索" to { showManualSearch() }, "知道了" to {})
+                    "当前不在对话界面",
+                    "请先打开微信聊天窗口再点悬浮球。或手动搜索姓名。\n" ,
+                    listOf("手动搜索" to { showManualSearch() }, "关闭" to {})
                 )
                 return
             }

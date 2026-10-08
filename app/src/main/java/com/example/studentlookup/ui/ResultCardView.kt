@@ -686,14 +686,17 @@ object ResultCardView {
             val isNameCol = idx == 1 && studentIndex != null
             val tv = TextView(context).apply {
                 this.text = text
-                // 全表统一字号：字号不同 → 三行高度不同 → 格子会高低不齐（之前姓名格 14sp 导致错开）
+                // 其它格 13sp；姓名格更大（17sp）。字号不同也能对齐——靠下面的统一最小高度兜底
                 textSize = 13f
                 gravity = Gravity.CENTER
                 setPadding(dp(context, 6), dp(context, 6), dp(context, 6), dp(context, 6))
                 setLineSpacing(0f, 1.0f)
-                // 所有格子统一三行高（= 年级/班次/老师 三行的高度），序号与姓名格也按同样高度，
-                // 这样整张表横竖都齐平，不会一高一低
-                minLines = 3
+                // 统一最小高度：只要不小于"最高那格"（姓名 17sp×3 行），整行就一样高，
+                // 字号大小就不会把表格撑得高低不齐
+                minHeight = dp(context, 70)
+                // 只有学期格需要三行（年级/班次/老师）；序号与姓名格不强行撑三行，
+                // 靠上面的 minHeight 与它们齐平 —— 否则姓名格(17sp×3行)会比别的格高
+                minLines = if (idx >= 2) 3 else 1
                 maxLines = 3
                 minWidth = dp(context, if (idx == 0) 44 else if (idx == 1) 78 else 86)
                 when (style) {
@@ -709,6 +712,7 @@ object ResultCardView {
                             if (isNameCol) {
                                 setTypeface(null, Typeface.BOLD)
                                 setTextColor(context.getColor(R.color.purple_700))
+                                textSize = 17f
                             } else {
                                 setTextColor(context.getColor(R.color.text_secondary))
                             }

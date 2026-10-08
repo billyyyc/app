@@ -201,13 +201,13 @@ class MainActivity : AppCompatActivity() {
             append("无障碍服务：").append(
                 when {
                     !accEnabled -> "未开启 ❌"
-                    accConnected -> "已开启 ✅（运行中）"
+                    accConnected -> "已开启 ✅"
                     else -> "已开启 ⚠️ 但未连接（点下方「修复无障碍连接」）"
                 }
             )
             append("\n")
-            append("悬浮球：").append(
-                if (FloatingBallService.isRunning) "运行中 ✅（通知请保留）" else "未启动 ❌"
+            append("悬浮球图标：").append(
+                if (FloatingBallService.isRunning) "运行中 ✅" else "未启动 ❌"
             )
         }
         binding.btnStart.isEnabled = overlay && accEnabled

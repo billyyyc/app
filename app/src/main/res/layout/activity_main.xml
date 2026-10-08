@@ -76,7 +76,7 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="8dp"
-            android:text="防止后台被清理" />
+            android:text="保护后台" />
 
         <Button
             android:id="@+id/btn_start"
