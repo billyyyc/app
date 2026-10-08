@@ -625,13 +625,15 @@ object ResultCardView {
         students.forEachIndexed { i, st ->
             val cells = ArrayList<String>()
             cells.add("${i + 1}")
-            cells.add(if (st.approximate) "≈ ${st.name}" else st.name)
+            cells.add((if (st.approximate) "≈ ${st.name}" else st.name))
             for (t in terms) {
                 val rec = st.byTerm[t]
                 cells.add(
                     if (rec == null) ""
-                    else listOfNotNull(rec.grade, rec.classSession, rec.teacher)
-                        .filter { it.isNotBlank() }.joinToString("\n")
+                    // 两行：第一行「年级 班次」，第二行「老师」——三行太挤且高低不齐
+                    else listOf(rec.grade, rec.classSession).filterNotNull()
+                        .filter { it.isNotBlank() }.joinToString(" ") + "\n" +
+                        (rec.teacher ?: "")
                 )
             }
             table.addView(matrixRow(context, cells, Style.NORMAL, i, onPickName))
@@ -688,6 +690,9 @@ object ResultCardView {
                 gravity = Gravity.CENTER
                 setPadding(dp(context, 6), dp(context, 6), dp(context, 6), dp(context, 6))
                 setLineSpacing(0f, 1.0f)
+                // 所有格子都至少两行高：序号/姓名与有内容的学期格等高，表格才不会一高一低
+                minLines = 2
+                maxLines = 2
                 minWidth = dp(context, if (idx == 0) 44 else if (idx == 1) 78 else 86)
                 when (style) {
                     Style.HEADER -> {
