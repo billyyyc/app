@@ -510,18 +510,30 @@ class FloatingBallService : Service() {
                     return@withContext
                 }
                 val rows = all.filter { it.name in hits }
-                val mr = Matcher.MatchResult(
-                    found = true, approximate = false, query = ocr,
-                    byName = rows.groupBy { it.name }
-                )
                 currentQ?.let { history.addLast(it) }
                 currentQ = Q(ocr, true, ocr)
-                ResultCardView.show(
-                    this@FloatingBallService, mr,
-                    onManualSearch = { q -> picked(q) },
-                    prefill = ocr,
-                    unresolved = unresolved,
-                    onCorrect = { seg -> startCorrection(seg) },
+                // 多个孩子 → 直接给网页版「多人查询」那种对照表（一行一个孩子，一列一个学期）
+                val low = rows.minOf { TermUtils.sortKey(it.term) }
+                val high = rows.maxOf { TermUtils.sortKey(it.term) }
+                val terms = all.map { it.term }.distinct()
+                    .filter { TermUtils.sortKey(it) in low..high }
+                    .sortedByDescending { TermUtils.sortKey(it) }
+                    .map { TermUtils.clean(it) }
+                val students = rows.groupBy { it.name }
+                    .map { (n, rs) ->
+                        ResultCardView.MatrixStudent(
+                            name = n,
+                            byTerm = rs.groupBy { TermUtils.clean(it.term) }
+                                .mapValues { it.value.first() }
+                        )
+                    }
+                    .sortedBy { it.name }
+                ResultCardView.showMatrix(
+                    this@FloatingBallService,
+                    title = "识别到 ${students.size} 个孩子（点姓名看详情）",
+                    terms = terms,
+                    students = students,
+                    onPickName = { n -> picked(n) },
                     onBack = backAction()
                 )
             }
@@ -575,6 +587,11 @@ class FloatingBallService : Service() {
                 AccessibilitySupport.setTitleCandidateIds(this, listOf(id))
                 toast("已记录标题控件 id，请再点一次悬浮球")
             }
+            return
+        }
+        // 一次输入多个名字（用 , ， 、 / 分隔）→ 直接走「多人对照表」
+        if (splitSegments(raw).size >= 2) {
+            handleOcrText(raw)
             return
         }
         if (push) currentQ?.let { history.addLast(it) }

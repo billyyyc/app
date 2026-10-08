@@ -34,6 +34,9 @@ object ResultCardView {
     /** 表格一行：某个学期 + 该学期该生的记录（没有记录则为空行，灰色显示） */
     data class GridRow(val termClean: String, val seq: Int?, val student: Student?)
 
+    /** 多人对照表的一个学生：姓名 + 「学期 -> 记录」 */
+    data class MatrixStudent(val name: String, val byTerm: Map<String, Student>)
+
     /** 列顺序：客服最常问的「哪个班、谁带」放前面 */
     private val COLUMNS = listOf("期数", "学期", "班次", "老师", "年级", "学校", "手机")
 
@@ -489,6 +492,143 @@ object ResultCardView {
         root.setOnClickListener { dismiss() }
         addOverlay(context, root)
         current = root
+    }
+
+    /**
+     * 多人对照表（对齐网页版「多人查询」）：一行一个学生、一列一个学期，
+     * 格子里是 年级/班次/老师（没参加的学期留空）。第一列序号、第二列姓名可点开单个学生。
+     */
+    fun showMatrix(
+        context: Context,
+        title: String,
+        terms: List<String>,
+        students: List<MatrixStudent>,
+        onPickName: (String) -> Unit,
+        onBack: (() -> Unit)? = null
+    ) {
+        dismiss()
+        val root = LinearLayout(context).apply {
+            orientation = LinearLayout.VERTICAL
+            setBackgroundColor(0x66000000)
+            gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
+            setPadding(0, dp(context, 40), 0, dp(context, 24))
+        }
+        val card = LinearLayout(context).apply {
+            orientation = LinearLayout.VERTICAL
+            setBackgroundColor(context.getColor(R.color.card_bg))
+            val pad = dp(context, 12)
+            setPadding(pad, pad, pad, pad)
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.MATCH_PARENT
+            ).apply { setMargins(dp(context, 10), 0, dp(context, 10), 0) }
+            setOnClickListener { }
+        }
+        card.addView(TextView(context).apply {
+            text = title
+            textSize = 17f
+            setTypeface(null, Typeface.BOLD)
+            setTextColor(context.getColor(R.color.text_primary))
+        })
+        card.addView(TextView(context).apply {
+            text = "行=学生，列=学期；点姓名看该生完整记录"
+            textSize = 12f
+            setTextColor(context.getColor(R.color.text_secondary))
+            setPadding(0, dp(context, 4), 0, dp(context, 6))
+        })
+
+        val vScroll = ScrollView(context).apply {
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, 0
+            ).apply { weight = 1f }
+        }
+        val hScroll = HorizontalScrollView(context).apply { isFillViewport = true }
+        val table = TableLayout(context)
+        // 表头
+        table.addView(matrixRow(context, listOf("序号", "姓名") + terms, Style.HEADER, null, null))
+        students.forEachIndexed { i, st ->
+            val cells = ArrayList<String>()
+            cells.add("${i + 1}")
+            cells.add(st.name)
+            for (t in terms) {
+                val rec = st.byTerm[t]
+                cells.add(
+                    if (rec == null) ""
+                    else listOfNotNull(rec.grade, rec.classSession, rec.teacher)
+                        .filter { it.isNotBlank() }.joinToString("\n")
+                )
+            }
+            table.addView(matrixRow(context, cells, Style.NORMAL, i, onPickName))
+        }
+        hScroll.addView(table)
+        vScroll.addView(hScroll)
+        card.addView(vScroll)
+
+        val btnRow = LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(0, dp(context, 6), 0, 0)
+        }
+        if (onBack != null) {
+            btnRow.addView(Button(context).apply {
+                text = "← 返回"
+                layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT)
+                    .apply { weight = 1f }
+                setOnClickListener { onBack.invoke() }
+            })
+        }
+        btnRow.addView(Button(context).apply {
+            text = "关闭"
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT)
+                .apply { weight = 1f }
+            setOnClickListener { dismiss() }
+        })
+        card.addView(btnRow)
+
+        root.addView(card)
+        addOverlay(context, root)
+        current = root
+    }
+
+    /** 对照表的一行；sticky 列不做（悬浮层里实现成本高），姓名列可点 */
+    private fun matrixRow(
+        context: Context,
+        cols: List<String>,
+        style: Style,
+        studentIndex: Int?,
+        onPickName: ((String) -> Unit)?
+    ): TableRow {
+        val row = TableRow(context)
+        cols.forEachIndexed { idx, text ->
+            val isNameCol = idx == 1 && studentIndex != null
+            val tv = TextView(context).apply {
+                this.text = text
+                textSize = 13f
+                gravity = Gravity.CENTER
+                setPadding(dp(context, 8), dp(context, 7), dp(context, 8), dp(context, 7))
+                setLineSpacing(dp(context, 2).toFloat(), 1.05f)
+                when (style) {
+                    Style.HEADER -> {
+                        setTypeface(null, Typeface.BOLD)
+                        setTextColor(context.getColor(R.color.text_primary))
+                        setBackgroundResource(R.drawable.cell_header)
+                    }
+                    else -> {
+                        setBackgroundResource(if (text.isBlank()) R.drawable.cell_empty else R.drawable.cell)
+                        if (text.isBlank()) setTextColor(0xFF9AA0A6.toInt())
+                        else setTextColor(context.getColor(R.color.text_primary))
+                        if (isNameCol) {
+                            setTypeface(null, Typeface.BOLD)
+                            setTextColor(context.getColor(R.color.purple_700))
+                        }
+                    }
+                }
+            }
+            if (isNameCol && onPickName != null) {
+                tv.setOnClickListener { onPickName(text) }
+            }
+            row.addView(tv)
+        }
+        return row
     }
 
     fun showManualSearch(context: Context, initialText: String = "", onSearch: (String) -> Unit) {
