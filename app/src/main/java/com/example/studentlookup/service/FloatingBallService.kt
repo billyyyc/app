@@ -6,6 +6,7 @@ import android.app.NotificationManager
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.content.pm.ServiceInfo
 import android.graphics.PixelFormat
 import android.os.Build
 import android.os.Handler
@@ -52,10 +53,19 @@ class FloatingBallService : Service() {
         wm = getSystemService(WINDOW_SERVICE) as WindowManager
         createChannel()
         // 悬浮球只显示一个悬浮视图，不涉及录屏，所以用「无类型」的两参 startForeground
-        // （历史上曾误用 mediaProjection 类型，Android 14 无授权时必抛 SecurityException 闪退）。
+        // Android 14 起前台服务必须声明并传入类型，否则 startForeground 抛
+        // MissingForegroundServiceTypeException（这就是悬浮球一直起不来的根因）。
+        // 悬浮球不属于任何既有类型，故用 specialUse（清单里已声明同名类型与用途说明）。
         // 前台服务是「进程不被 ColorOS 清掉」的关键；万一启动失败也不能崩，要如实记下来。
         val fgOk = try {
-            startForeground(NOTIF_ID, buildNotification())
+            if (Build.VERSION.SDK_INT >= 34) {
+                startForeground(
+                    NOTIF_ID, buildNotification(),
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
+                )
+            } else {
+                startForeground(NOTIF_ID, buildNotification())
+            }
             true
         } catch (t: Throwable) {
             Diag.log(this, "Ball", "startForeground 失败：${t.javaClass.simpleName} ${t.message}")
@@ -149,7 +159,11 @@ class FloatingBallService : Service() {
                 return
             }
             if (!acc.isInWechat()) {
-                Diag.log(this, "Ball", "不在微信（当前包名 ${acc.currentPackage}）")
+                Diag.log(
+                    this, "Ball",
+                    "不在微信（活动窗口=${acc.activePackage() ?: "null"} " +
+                        "事件包名=${acc.currentPackage ?: "null"}）"
+                )
                 notifyCard(
                     "当前不在微信对话界面",
                     "请先打开要查询的学员/家长的微信聊天窗口，再点悬浮球。\n" +
@@ -237,6 +251,42 @@ class FloatingBallService : Service() {
 
     /** 无障碍读不到标题时的 OCR 兜底。 */
     private fun tryOcr() {
+        // 主路径：Android 11+ 由无障碍服务直接截屏识别，不需要任何额外授权、也不会有进程崩溃风险。
+        // （本机实测微信完全不向无障碍暴露控件树，所以这条路径就是微信里的唯一自动识别方式。）
+        val acc = LookupAccessibilityService.instance
+        if (acc != null && acc.canTakeScreenshotNow()) {
+            toast("正在识别微信标题…")
+            CoroutineScope(Dispatchers.Main).launch {
+                val full = acc.captureScreen()
+                if (full == null) {
+                    Diag.log(this@FloatingBallService, "Ball", "无障碍截屏失败 → 转手动搜索")
+                    notifyCard(
+                        "无法读取微信标题",
+                        "自动识别没成功，请手动输入姓名搜索。",
+                        listOf("手动搜索" to { showManualSearch() })
+                    )
+                    return@launch
+                }
+                val skip = acc.statusBarHeightPx()
+                val title = kotlinx.coroutines.withContext(Dispatchers.IO) {
+                    OcrFallback.recognizeTitleLine(full, skip, skip * 3)
+                }
+                runCatching { full.recycle() }
+                Diag.log(this@FloatingBallService, "Ball", "OCR 识别标题=${title ?: "（空）"}")
+                if (title.isNullOrBlank()) {
+                    notifyCard(
+                        "未能识别",
+                        "没有识别出姓名。请手动输入姓名搜索。",
+                        listOf("手动搜索" to { showManualSearch() })
+                    )
+                } else {
+                    query(title)
+                }
+            }
+            return
+        }
+
+        // 旧路径（Android 10 及以下）：MediaProjection 截屏，需要用户单独授权。
         // 只有用户已在 App 内明确授权、且截屏服务正在运行时才走 OCR；
         // 不在后台启动截屏服务（会被系统拒绝，且可能拖垮进程）。
         if (ScreenCaptureService.instance == null) {

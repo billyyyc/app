@@ -6,6 +6,14 @@
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
     <!-- 前台服务保活 -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <!--
+      Android 14 起，每个前台服务都必须声明并传入一个「类型」。悬浮球不属于任何既有类型
+      （不是播放、不是录屏、不是同步），所以用 specialUse 并说明用途。
+      历史上这里什么都没有 → startForeground 抛 MissingForegroundServiceTypeException
+      → FloatingBallService 一创建就崩溃 → 进程死 → 无障碍服务被系统记为"已崩溃"并关掉开关，
+      这正是「点悬浮球没反应 / 权限被自动关闭」的真正根因。
+    -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
@@ -47,10 +55,15 @@
             android:name=".ui.CapturePermissionActivity"
             android:exported="false" />
 
-        <!-- 悬浮球服务（仅悬浮视图，不做录屏，无需 mediaProjection 类型） -->
+        <!-- 悬浮球服务（仅悬浮视图 + 会话查询，用 specialUse 类型） -->
         <service
             android:name=".service.FloatingBallService"
-            android:exported="false" />
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="悬浮速查球：常驻一个可点击的悬浮按钮，按需读取当前微信会话标题做本地查询。" />
+        </service>
 
         <!-- 截屏采集服务（MediaProjection） -->
         <service

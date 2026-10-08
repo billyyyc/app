@@ -78,6 +78,10 @@ class MainActivity : AppCompatActivity() {
             ).show()
             startActivity(Intent(this, CapturePermissionActivity::class.java))
         }
+        // Android 11+ 由无障碍服务直接截屏识别，不再需要这个授权入口（也没有录屏提示条）
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            binding.btnOcr.visibility = android.view.View.GONE
+        }
         binding.btnBattery.setOnClickListener { requestBatteryWhitelist() }
         binding.btnDiagCopy.setOnClickListener {
             val text = Diag.text(this, 60)

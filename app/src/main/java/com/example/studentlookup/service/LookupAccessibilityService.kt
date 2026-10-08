@@ -2,11 +2,17 @@ package com.example.studentlookup.service
 
 import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.AccessibilityServiceInfo
+import android.graphics.Bitmap
 import android.graphics.Rect
+import android.os.Build
 import android.util.Log
+import android.view.Display
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import com.example.studentlookup.util.AccessibilitySupport
+import com.example.studentlookup.util.Diag
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlin.coroutines.resume
 
 /**
  * 无障碍服务：感知当前是否处于微信，并读取会话标题（即对方备注名）。
@@ -55,6 +61,10 @@ class LookupAccessibilityService : AccessibilityService() {
     @Volatile
     var currentPackage: String? = null
 
+    /** 只用于日志：避免每条事件都写运行记录 */
+    @Volatile
+    private var lastLoggedPkg: String? = null
+
     override fun onServiceConnected() {
         instance = this
         connectedAt = System.currentTimeMillis()
@@ -67,11 +77,22 @@ class LookupAccessibilityService : AccessibilityService() {
             packageNames = arrayOf(WECHAT_PACKAGE)
         }
         Log.d(TAG, "onServiceConnected")
+        Diag.log(
+            this, "A11ySvc",
+            "服务已连接：capabilities=${serviceInfo?.capabilities} flags=${serviceInfo?.flags} " +
+                "事件类型=${serviceInfo?.eventTypes}"
+        )
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
-        // 任何事件都更新一次当前包名（服务本身只订阅了微信，但这样能及时反映切换）
-        event?.packageName?.toString()?.takeIf { it.isNotEmpty() }?.let { currentPackage = it }
+        val e = event ?: return
+        val pkg = e.packageName?.toString()
+        if (pkg.isNullOrEmpty()) return
+        currentPackage = pkg
+        if (pkg != lastLoggedPkg) {
+            lastLoggedPkg = pkg
+            Diag.log(this, "A11ySvc", "收到窗口事件：$pkg（type=${e.eventType}）")
+        }
     }
 
     override fun onInterrupt() {}
@@ -96,9 +117,87 @@ class LookupAccessibilityService : AccessibilityService() {
      * 读不到窗口时再退回事件记录的包名。
      */
     fun isInWechat(): Boolean {
-        val pkg = runCatching { rootInActiveWindow?.packageName?.toString() }.getOrNull()
+        val pkg = activePackage()
         if (!pkg.isNullOrEmpty()) return pkg == WECHAT_PACKAGE
         return currentPackage == WECHAT_PACKAGE
+    }
+
+    /**
+     * 当前活动窗口所属包名。
+     * 优先 rootInActiveWindow；某些 ROM/时机下它会是 null，此时退回「交互窗口列表里 isActive 的那个」。
+     */
+    fun activePackage(): String? {
+        val direct = runCatching { rootInActiveWindow?.packageName?.toString() }.getOrNull()
+        if (!direct.isNullOrEmpty()) return direct
+        return runCatching {
+            windows.orEmpty()
+                .firstOrNull { it.isActive }
+                ?.root?.packageName?.toString()
+        }.getOrNull()
+    }
+
+    /** 取当前活动窗口的根节点（带兜底）。 */
+    private fun activeRoot(): AccessibilityNodeInfo? {
+        runCatching { rootInActiveWindow }.getOrNull()?.let { return it }
+        return runCatching {
+            windows.orEmpty().firstOrNull { it.isActive }?.root
+        }.getOrNull()
+    }
+
+    /**
+     * 微信等应用可能完全不向无障碍暴露控件树（本机实测：微信窗口 hasChildren=false），
+     * 此时唯一可行的自动取标题方式就是「截屏 + OCR」。
+     * Android 11(API 30) 起无障碍服务可以直接截屏，不需要录屏授权、也不需要额外前台服务。
+     */
+    fun canTakeScreenshotNow(): Boolean =
+        Build.VERSION.SDK_INT >= Build.VERSION_CODES.R &&
+            ((serviceInfo?.capabilities ?: 0) and
+                AccessibilityServiceInfo.CAPABILITY_CAN_TAKE_SCREENSHOT) != 0
+
+    /** 截取当前屏幕；失败返回 null（任何情况都不抛异常）。 */
+    suspend fun captureScreen(): Bitmap? = suspendCancellableCoroutine { cont ->
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
+            cont.resume(null)
+            return@suspendCancellableCoroutine
+        }
+        try {
+            takeScreenshot(
+                Display.DEFAULT_DISPLAY, mainExecutor,
+                object : TakeScreenshotCallback {
+                    override fun onSuccess(screenshot: ScreenshotResult) {
+                        val bmp = try {
+                            Bitmap.wrapHardwareBuffer(
+                                screenshot.hardwareBuffer, screenshot.colorSpace
+                            )?.copy(Bitmap.Config.ARGB_8888, false)
+                        } catch (t: Throwable) {
+                            Log.w(TAG, "wrapHardwareBuffer: ${t.message}")
+                            null
+                        }
+                        try {
+                            screenshot.hardwareBuffer.close()
+                        } catch (t: Throwable) {
+                            Log.w(TAG, "close buffer: ${t.message}")
+                        }
+                        cont.resume(bmp)
+                    }
+
+                    override fun onFailure(errorCode: Int) {
+                        Diag.log(this@LookupAccessibilityService, "A11ySvc", "无障碍截屏失败：code=$errorCode")
+                        cont.resume(null)
+                    }
+                }
+            )
+        } catch (t: Throwable) {
+            Diag.log(this, "A11ySvc", "无障碍截屏异常：${t.javaClass.simpleName} ${t.message}")
+            cont.resume(null)
+        }
+    }
+
+    /** 状态栏高度（像素）：截屏后要跳过状态栏里的时间/电量，避免被 OCR 当成姓名。 */
+    fun statusBarHeightPx(): Int {
+        val id = resources.getIdentifier("status_bar_height", "dimen", "android")
+        val h = if (id > 0) resources.getDimensionPixelSize(id) else 0
+        return if (h > 0) h else (resources.displayMetrics.density * 40).toInt()
     }
 
     /**
@@ -106,8 +205,9 @@ class LookupAccessibilityService : AccessibilityService() {
      * 优先按候选 id 精确取；取不到则取屏幕顶部区域内最靠上的非空文本节点。
      */
     fun readConversationTitle(): String? {
-        val root = rootInActiveWindow ?: run {
+        val root = activeRoot() ?: run {
             Log.d(TAG, "readTitle: no active window")
+            Diag.log(this, "A11ySvc", "读标题失败：拿不到活动窗口")
             return null
         }
         Log.d(TAG, "readTitle: root=${root.packageName} cls=${root.className}")
