@@ -92,14 +92,18 @@ class FloatingBallService : Service() {
         Diag.log(this, "Ball", "悬浮球已显示（前台服务已启动）")
         // 启动悬浮球时顺手自愈：ColorOS 清掉进程后无障碍常处于「开着但没绑上」的状态
         CoroutineScope(Dispatchers.Main).launch {
-            if (AccessibilitySupport.isEnabled(this@FloatingBallService) &&
-                LookupAccessibilityService.instance == null
-            ) {
-                if (AccessibilitySupport.canSelfRepair(this@FloatingBallService)) {
-                    Diag.log(this@FloatingBallService, "Ball", "启动时发现无障碍未连接 → 自动重绑")
-                    AccessibilitySupport.rebind(this@FloatingBallService)
-                } else {
-                    Diag.log(this@FloatingBallService, "Ball", "启动时发现无障碍未连接，且无自愈权限")
+            if (LookupAccessibilityService.instance == null) {
+                when {
+                    !AccessibilitySupport.canSelfRepair(this@FloatingBallService) ->
+                        Diag.log(this@FloatingBallService, "Ball", "无障碍未连接，且无自愈权限")
+                    AccessibilitySupport.isEnabled(this@FloatingBallService) -> {
+                        Diag.log(this@FloatingBallService, "Ball", "无障碍未连接 → 自动重绑")
+                        AccessibilitySupport.rebind(this@FloatingBallService)
+                    }
+                    else -> {
+                        Diag.log(this@FloatingBallService, "Ball", "无障碍被关闭 → 自动开启")
+                        AccessibilitySupport.rebind(this@FloatingBallService)
+                    }
                 }
             }
         }
@@ -225,6 +229,30 @@ class FloatingBallService : Service() {
 
     /** 无障碍服务「没连上」时的处理：能自愈就自愈，否则给逐步可见的修复引导。 */
     private fun handleAccessibilityNotRunning() {
+        // 有自愈权限（install 时已授予）：不论「被系统关掉」还是「开着没连上」，直接自己修好
+        if (AccessibilitySupport.canSelfRepair(this)) {
+            toast("正在自动开启无障碍服务…")
+            CoroutineScope(Dispatchers.Main).launch {
+                AccessibilitySupport.rebind(this@FloatingBallService)
+                delay(1500)
+                val ok = LookupAccessibilityService.instance != null
+                Diag.log(this@FloatingBallService, "Ball", "点击时自动修复：已连接=$ok")
+                if (ok) {
+                    toast("已自动开启，请再点一次悬浮球")
+                } else {
+                    notifyCard(
+                        "自动开启没成功",
+                        "请打开系统设置 → 无障碍 → 已下载的服务 → 学员速查，" +
+                            "先关闭、再打开一次。修好前可以先用下面的手动搜索。",
+                        listOf(
+                            "去无障碍设置" to { openAccessibilitySettings() },
+                            "手动搜索" to { showManualSearch() }
+                        )
+                    )
+                }
+            }
+            return
+        }
         if (!AccessibilitySupport.isEnabled(this)) {
             notifyCard(
                 "无障碍服务未开启",

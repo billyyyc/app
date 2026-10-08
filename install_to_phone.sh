@@ -21,13 +21,14 @@ echo ">> adb devices"
 "$ADB" devices | sed '1d' | grep -q device || { echo "未检测到已连接设备，请先连接（USB 或无线调试）"; exit 1; }
 
 echo ">> 重装 APK（保留数据/授权）"
-if "$ADB" install -r -t "$APK" >/dev/null 2>&1; then
-  echo "   原地升级成功：学员数据与已授权项都保留"
+# -g：把「自愈权限」(WRITE_SECURE_SETTINGS) 一并授上——有这个权限，App 才能在被系统关掉无障碍后自己重新开启
+if "$ADB" install -r -g -t "$APK" >/dev/null 2>&1; then
+  echo "   原地升级成功：学员数据与已授权项都保留（含自愈权限）"
 else
   echo "   ⚠️ 原地升级失败（历史版本的签名与本次不同，系统拒绝覆盖安装）"
   echo "   改为卸载重装：App 内已导入的学员数据会被清空，装好后需要重新导入一次 Excel"
   "$ADB" uninstall "$PKG" >/dev/null 2>&1 || true
-  "$ADB" install -t "$APK"
+  "$ADB" install -g -t "$APK"
 fi
 
 echo ">> 自动补授权（跳过手动开关）"

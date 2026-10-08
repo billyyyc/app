@@ -132,26 +132,32 @@ class MainActivity : AppCompatActivity() {
      */
     private fun maybeAutoRepair() {
         if (autoRepairTried) return
-        if (!AccessibilitySupport.isEnabled(this)) return
         if (AccessibilitySupport.isConnected()) return
         autoRepairTried = true
         if (!AccessibilitySupport.canSelfRepair(this)) {
-            Diag.log(this, "App", "无障碍已开启但未连接；且当前无自愈权限（需要一次性 adb 授权）")
+            Diag.log(this, "App", "无障碍未连接，且当前无自愈权限（需要一次性 adb 授权）")
             return
         }
-        Diag.log(this, "App", "无障碍已开启但未连接 → 自动重新绑定")
+        val wasEnabled = AccessibilitySupport.isEnabled(this)
+        Diag.log(
+            this, "App",
+            if (wasEnabled) "无障碍已开启但未连接 → 自动重新绑定" else "无障碍被关闭 → 自动重新开启"
+        )
         CoroutineScope(Dispatchers.Main).launch {
             AccessibilitySupport.rebind(this@MainActivity)
             delay(1800)
             val ok = AccessibilitySupport.isConnected()
             updatePermissionStatus()
-            Diag.log(this@MainActivity, "App", "自动重绑结果：已连接=$ok")
-            Toast.makeText(
-                this@MainActivity,
-                if (ok) "已自动重新连接无障碍服务 ✅"
-                else "自动重连没成功，请点「修复无障碍连接」或去系统设置把本服务关→开一次",
-                Toast.LENGTH_LONG
-            ).show()
+            Diag.log(this@MainActivity, "App", "自动修复结果：已连接=$ok")
+            if (ok) {
+                Toast.makeText(this@MainActivity, "无障碍服务已自动开启 ✅", Toast.LENGTH_SHORT).show()
+            } else {
+                Toast.makeText(
+                    this@MainActivity,
+                    "自动开启没成功，请点「修复无障碍连接」或去系统设置里手动打开一次",
+                    Toast.LENGTH_LONG
+                ).show()
+            }
         }
     }
 
