@@ -43,7 +43,7 @@ class FloatingBallService : Service() {
         private const val CHANNEL_ID = "float_channel"
         private const val NOTIF_ID = 1
         /** 悬浮球直径（dp）——半透明，尽量不挡内容 */
-        private const val BALL_DP = 56
+        private const val BALL_DP = 48
         var isRunning = false
     }
 
@@ -552,12 +552,14 @@ class FloatingBallService : Service() {
      */
     private fun buildGrid(allTerms: List<String>, recs: List<Student>): List<ResultCardView.GridRow> {
         if (recs.isEmpty()) return emptyList()
-        val attended = recs.associateBy { it.term }
-        val seqOf = recs.sortedBy { TermUtils.sortKey(it.term) }
-            .mapIndexed { i, s -> s.term to (i + 1) }
+        // 同一学期可能有多行（同一学生报了不同班次）：期数按「学期」去重编号
+        val terms = recs.map { it.term }.distinct()
+        val attended = recs.groupBy { it.term }.mapValues { it.value.first() }
+        val seqOf = terms.sortedBy { TermUtils.sortKey(it) }
+            .mapIndexed { i, t -> t to (i + 1) }
             .toMap()
-        val low = recs.minOf { TermUtils.sortKey(it.term) }
-        val high = recs.maxOf { TermUtils.sortKey(it.term) }
+        val low = terms.minOf { TermUtils.sortKey(it) }
+        val high = terms.maxOf { TermUtils.sortKey(it) }
         return allTerms
             .filter { TermUtils.sortKey(it) in low..high }
             .sortedByDescending { TermUtils.sortKey(it) }

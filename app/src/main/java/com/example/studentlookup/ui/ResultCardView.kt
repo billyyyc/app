@@ -59,7 +59,6 @@ object ResultCardView {
     ) {
         dismiss()
         val root = View.inflate(context, R.layout.result_card, null) as LinearLayout
-        fitCardHeight(context, root)
 
         val tvTitle = root.findViewById<TextView>(R.id.tv_title)
         val container = root.findViewById<LinearLayout>(R.id.container_students)
@@ -220,6 +219,8 @@ object ResultCardView {
 
     private fun buildSummary(context: Context, name: String, recs: List<Student>): View {
         val age = recs.firstNotNullOfOrNull { TermUtils.ageFromBirth(it.birth) } ?: "未知"
+        // 期数按「学期」去重：同一学期里可能有两行（同一学生报了不同班次）
+        val termCount = recs.map { it.term }.distinct().size
         return LinearLayout(context).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(context, 2), dp(context, 6), 0, dp(context, 8))
@@ -230,7 +231,7 @@ object ResultCardView {
                 setTypeface(null, Typeface.BOLD)
             })
             addView(TextView(context).apply {
-                text = "年龄：$age      就读：${recs.size} 期"
+                text = "年龄：$age      就读：$termCount 期"
                 textSize = 14f
                 setTextColor(context.getColor(R.color.text_secondary))
                 setPadding(0, dp(context, 4), 0, 0)
@@ -269,13 +270,6 @@ object ResultCardView {
     }
 
     /** 卡片高度按屏幕算：中间表格滚，底部按钮永远可见 */
-    private fun fitCardHeight(context: Context, root: View) {
-        val card = root.findViewById<View>(R.id.card_root) ?: return
-        val lp = card.layoutParams as LinearLayout.LayoutParams
-        val screenH = context.resources.displayMetrics.heightPixels
-        lp.height = (screenH - dp(context, 40 + 24 + 16)).coerceAtLeast(dp(context, 320))
-        card.layoutParams = lp
-    }
 
     /** 纯提示卡片：用于「无障碍没连上 / 不在微信 / 识别失败」等场景，永远看得见 */
     fun showNotice(
@@ -366,7 +360,6 @@ object ResultCardView {
     fun showManualSearch(context: Context, initialText: String = "", onSearch: (String) -> Unit) {
         dismiss()
         val root = View.inflate(context, R.layout.result_card, null) as LinearLayout
-        fitCardHeight(context, root)
         val tvTitle = root.findViewById<TextView>(R.id.tv_title)
         val container = root.findViewById<LinearLayout>(R.id.container_students)
         val etSearch = root.findViewById<EditText>(R.id.et_search)
@@ -423,6 +416,12 @@ object ResultCardView {
         root.setOnClickListener { dismiss() }
         val card = root.findViewById<View>(R.id.card_root)
         card?.setOnClickListener { /* 阻止关闭 */ }
+        // 默认把焦点给卡片本身、不落到输入框：否则每次弹卡片都会自动跳键盘挡住输入框
+        card?.isFocusableInTouchMode = true
+        card?.requestFocus()
+        root.findViewById<EditText>(R.id.et_search)?.clearFocus()
+        // 键盘弹起时让窗口跟着缩（配合 weight 布局，输入框与按钮不被挡住）
+        params.softInputMode = WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE
         // 浮层加不上（例如悬浮窗权限被系统收回）绝不能崩掉整个进程
         try {
             wm.addView(root, params)
