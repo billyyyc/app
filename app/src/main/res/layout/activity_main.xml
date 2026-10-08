@@ -72,13 +72,6 @@
             android:text="修复无障碍连接" />
 
         <Button
-            android:id="@+id/btn_ocr"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="8dp"
-            android:text="授权截图识别（可选兜底）" />
-
-        <Button
             android:id="@+id/btn_battery"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
@@ -99,45 +92,6 @@
             android:layout_marginTop="16dp"
             android:textSize="13sp"
             android:textColor="@color/text_secondary" />
-
-        <TextView
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="20dp"
-            android:text="最近运行记录（出问题请复制发给技术支持）"
-            android:textSize="13sp"
-            android:textStyle="bold"
-            android:textColor="@color/text_primary" />
-
-        <TextView
-            android:id="@+id/tv_diag"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="6dp"
-            android:text="（暂无）"
-            android:textSize="11sp"
-            android:textColor="@color/text_secondary" />
-
-        <LinearLayout
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="8dp"
-            android:orientation="horizontal">
-
-            <Button
-                android:id="@+id/btn_diag_copy"
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_weight="1"
-                android:text="复制运行记录" />
-
-            <Button
-                android:id="@+id/btn_diag_clear"
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_weight="1"
-                android:text="清空记录" />
-        </LinearLayout>
 
     </LinearLayout>
 </ScrollView>

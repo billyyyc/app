@@ -27,7 +27,8 @@ object OcrFallback {
     /** 明显不是人名的文本（状态栏/导航/时间等） */
     private val NOT_NAME = setOf(
         "微信", "通讯录", "发现", "我", "搜索", "取消", "返回", "更多", "＋", "+",
-        "聊天信息", "详细资料", "发送", "关闭", "确定", "设置", "文件传输助手"
+        "聊天信息", "详细资料", "发送", "关闭", "确定", "设置", "文件传输助手",
+        "已收款", "已转账", "转账", "微信支付", "红包", "已读", "对方正在输入"
     )
     private val TIME_LIKE = Regex("^[\\d\\s:：.\\-+/%年月日]+$")
 
@@ -46,7 +47,12 @@ object OcrFallback {
      * @param skipTopPx 从该 y 开始裁（通常是状态栏高度）
      * @param maxHeightPx 裁剪高度（标题条大致范围，避免把聊天内容也识别进来）
      */
-    suspend fun recognizeTitleLine(full: Bitmap, skipTopPx: Int, maxHeightPx: Int): String? {
+    suspend fun recognizeTitleLine(
+        context: Context,
+        full: Bitmap,
+        skipTopPx: Int,
+        maxHeightPx: Int
+    ): String? {
         val top = skipTopPx.coerceIn(0, (full.height - 1).coerceAtLeast(0))
         val h = maxHeightPx.coerceIn(1, full.height - top)
         val crop = try {
@@ -55,12 +61,32 @@ object OcrFallback {
             android.util.Log.w("SLK-OCR", "裁剪失败：${t.message}")
             return null
         }
-        val text = recognize(crop) ?: return null
+        // 1) 放大 2 倍再识别：微信标题字号偏小，放大后识别率明显更好
+        val up = try {
+            Bitmap.createScaledBitmap(crop, crop.width * 2, crop.height * 2, true)
+        } catch (t: Throwable) {
+            null
+        }
+        if (up != null) {
+            val r = bestLine(context, up, "2x")
+            if (r != null) return r
+        }
+        // 2) 原尺寸兜一次（放大反而糊掉的情况）
+        val r2 = bestLine(context, crop, "1x")
+        if (up != null) runCatching { up.recycle() }
+        return r2
+    }
+
+    private suspend fun bestLine(context: Context, bmp: Bitmap, tag: String): String? {
+        val text = recognize(bmp) ?: return null
         val lines = text.textBlocks
             .flatMap { it.lines }
             .sortedBy { it.boundingBox?.top ?: 0 }
             .map { it.text.trim() }
             .filter { it.isNotEmpty() }
+        Diag.log(context, "OCR", "[$tag] 候选行=${lines.joinToString(" / ")}")
+        // 含逗号的多段（一个备注里几个孩子）优先
+        lines.firstOrNull { (it.contains(',') || it.contains('，')) && it.length >= 4 }?.let { return it }
         return lines.firstOrNull { looksLikeName(it) } ?: lines.firstOrNull()
     }
 

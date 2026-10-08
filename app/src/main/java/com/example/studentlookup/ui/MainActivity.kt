@@ -1,8 +1,6 @@
 package com.example.studentlookup.ui
 
 import android.Manifest
-import android.content.ClipData
-import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -23,6 +21,7 @@ import com.example.studentlookup.service.FloatingBallService
 import com.example.studentlookup.util.AccessibilitySupport
 import com.example.studentlookup.util.Diag
 import com.example.studentlookup.util.RomUtils
+import com.example.studentlookup.util.TermUtils
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -51,8 +50,7 @@ class MainActivity : AppCompatActivity() {
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
 
-        binding.tvRom.text = "机型适配：${RomUtils.getRom().name}\n${RomUtils.guidance()}" +
-            "\n\n开启无障碍服务（点下方按钮后按此操作）：\n${RomUtils.accessibilityGuidance()}"
+        binding.tvRom.text = "机型适配：${RomUtils.getRom().name}\n${RomUtils.guidance()}"
 
         binding.btnImport.setOnClickListener {
             importLauncher.launch(arrayOf(
@@ -70,33 +68,38 @@ class MainActivity : AppCompatActivity() {
             startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION))
         }
         binding.btnRepair.setOnClickListener { repairAccessibility() }
-        binding.btnOcr.setOnClickListener {
-            Toast.makeText(
-                this,
-                "可选功能：仅用于无障碍读不到标题时识别顶部标题，不会保存或上传画面。",
-                Toast.LENGTH_LONG
-            ).show()
-            startActivity(Intent(this, CapturePermissionActivity::class.java))
-        }
-        // Android 11+ 由无障碍服务直接截屏识别，不再需要这个授权入口（也没有录屏提示条）
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            binding.btnOcr.visibility = android.view.View.GONE
-        }
         binding.btnBattery.setOnClickListener { requestBatteryWhitelist() }
-        binding.btnDiagCopy.setOnClickListener {
-            val text = Diag.text(this, 60)
-            val cm = getSystemService(CLIPBOARD_SERVICE) as ClipboardManager
-            cm.setPrimaryClip(ClipData.newPlainText("diag", text))
-            Toast.makeText(this, "已复制运行记录", Toast.LENGTH_SHORT).show()
-        }
-        binding.btnDiagClear.setOnClickListener {
-            Diag.clear(this)
-            refreshDiag()
-            Toast.makeText(this, "已清空", Toast.LENGTH_SHORT).show()
-        }
 
         Diag.log(this, "App", "打开首页")
         refreshDataInfo()
+        handleDebugQuery(intent)
+    }
+
+    override fun onNewIntent(intent: Intent?) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleDebugQuery(intent)
+    }
+
+    /**
+     * 调试入口（仅 adb 可用）：
+     *   adb shell am start -n com.example.studentlookup/.ui.MainActivity --es debug_query "陈怡彤妈"
+     * 转发给悬浮球服务，用真实数据跑一遍查询，方便远程验证匹配与卡片样式。
+     */
+    private fun handleDebugQuery(intent: Intent?) {
+        val q = intent?.getStringExtra("debug_query")?.takeIf { it.isNotBlank() }
+        val f = intent?.getStringExtra("debug_ocr_file")?.takeIf { it.isNotBlank() }
+        if (q == null && f == null) return
+        if (q != null) Diag.log(this, "App", "调试验证查询：$q")
+        if (f != null) Diag.log(this, "App", "调试验证OCR：$f")
+        runCatching {
+            startService(
+                Intent(this, FloatingBallService::class.java).apply {
+                    if (q != null) putExtra("debug_query", q)
+                    if (f != null) putExtra("debug_ocr_file", f)
+                }
+            )
+        }
     }
 
     override fun onResume() {
@@ -104,7 +107,6 @@ class MainActivity : AppCompatActivity() {
         updatePermissionStatus()
         // 刚回到前台时无障碍服务可能还在重连，稍后再确认一次，避免误报「未连接」
         binding.root.postDelayed({ updatePermissionStatus() }, 900)
-        refreshDiag()
         maybeAutoRepair()
         maybeAutoStartBall()
     }
@@ -173,11 +175,6 @@ class MainActivity : AppCompatActivity() {
                 startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
             }
         }
-    }
-
-    private fun refreshDiag() {
-        val t = Diag.text(this, 20)
-        binding.tvDiag.text = if (t.isBlank()) "（暂无）" else t
     }
 
     private fun updatePermissionStatus() {
@@ -303,14 +300,17 @@ class MainActivity : AppCompatActivity() {
     private fun refreshDataInfo() {
         CoroutineScope(Dispatchers.IO).launch {
             val dao = (applicationContext as App).database.studentDao()
-            val count = dao.count()
-            val terms = dao.getTerms().size
-            val students = dao.countStudents()
+            val terms = dao.getTerms()
             val last = prefs.getLong("last_import", 0L)
             val time = if (last == 0L) "尚未导入" else
                 SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.CHINA).format(Date(last))
+            val latest = terms.maxByOrNull { TermUtils.sortKey(it) }
             withContext(Dispatchers.Main) {
-                binding.tvData.text = "当前数据：$count 条 · $terms 个学期 · $students 名学生\n导入时间：$time"
+                binding.tvData.text = buildString {
+                    append("共 ${terms.size} 个学期")
+                    if (latest != null) append(" · 最新一期：${TermUtils.clean(latest)}")
+                    append("\n导入时间：$time")
+                }
             }
         }
     }

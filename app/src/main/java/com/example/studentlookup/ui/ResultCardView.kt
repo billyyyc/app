@@ -30,11 +30,21 @@ object ResultCardView {
     private var current: View? = null
     private var currentMenu: View? = null
 
+    /** 列顺序：班次/老师放前面（客服最常问的就是"哪个班、谁带"） */
+    private val COLUMNS = listOf("期数", "学期", "班次", "老师", "年级", "学校", "手机")
+
     fun show(
         context: Context,
         result: Matcher.MatchResult,
         onManualSearch: (String) -> Unit,
-        onDump: (() -> String?)? = null
+        onDump: (() -> String?)? = null,
+        /** 同一家长的其他孩子：姓名 -> 「2026暑期 五晚D 徐铮」这样的摘要 */
+        siblings: List<Pair<String, String>> = emptyList(),
+        /** 点选候选学生后的回调（用于记住「识别文字 -> 正确姓名」） */
+        onPick: ((String) -> Unit)? = null,
+        /** 没能认准的识别片段（例如多孩子备注里认错的某一段），可点进去纠正 */
+        unresolved: List<String> = emptyList(),
+        onCorrect: ((String) -> Unit)? = null
     ) {
         dismiss()
         val root = View.inflate(context, R.layout.result_card, null) as LinearLayout
@@ -63,6 +73,31 @@ object ResultCardView {
                     }
                     container.addView(buildSummary(context, name, recs))
                     container.addView(buildStudentTable(context, name, recs))
+                    container.addView(TextView(context).apply {
+                        text = "黄色行 = 最新一期"
+                        textSize = 11f
+                        setTextColor(context.getColor(R.color.text_secondary))
+                        setPadding(0, dp(context, 4), 0, 0)
+                    })
+                    if (siblings.isNotEmpty()) {
+                        container.addView(TextView(context).apply {
+                            text = "同一家长的其他孩子（点名字可切换）："
+                            textSize = 13f
+                            setTypeface(null, android.graphics.Typeface.BOLD)
+                            setTextColor(context.getColor(R.color.text_primary))
+                            setPadding(0, dp(context, 10), 0, 0)
+                        })
+                        for ((n, info) in siblings) {
+                            container.addView(TextView(context).apply {
+                                text = "▸ $n    $info"
+                                textSize = 14f
+                                setTextColor(context.getColor(R.color.purple_700))
+                                setPadding(dp(context, 4), dp(context, 6), 0, dp(context, 2))
+                                setOnClickListener { onManualSearch(n) }
+                            })
+                        }
+                    }
+                    addUnresolved(context, container, unresolved, onCorrect)
                     btnCopy.visibility = View.VISIBLE
                     btnCopy.setOnClickListener {
                         copy(context, buildCopyText(name, recs))
@@ -72,7 +107,7 @@ object ResultCardView {
                 result.byName.size <= 12 -> {
                     tvStatus.text = "命中 ${result.byName.size} 个姓名，点选查看："
                     tvStatus.setTextColor(context.getColor(R.color.text_secondary))
-                    val names = result.names.sorted()
+                    val names = result.suggestions.ifEmpty { result.names.sorted() }
                     for (n in names) {
                         val tv = TextView(context).apply {
                             text = "▸ $n"
@@ -91,10 +126,25 @@ object ResultCardView {
                     btnCopy.visibility = View.GONE
                 }
             }
+        } else if (result.suggestions.isNotEmpty()) {
+            // OCR 认错字 / 备注名写错时的主要出路：给最像的少量候选，人工点选
+            tvStatus.text = "未精确命中，请点选最像的学生："
+            tvStatus.setTextColor(context.getColor(R.color.warn))
+            for (n in result.suggestions) {
+                container.addView(TextView(context).apply {
+                    text = "▸ $n"
+                    textSize = 16f
+                    setTextColor(context.getColor(R.color.purple_700))
+                    setPadding(dp(context, 4), dp(context, 8), 0, dp(context, 2))
+                    setOnClickListener { (onPick ?: onManualSearch)(n) }
+                })
+            }
+            btnCopy.visibility = View.GONE
         } else {
-            tvStatus.text = "未找到对应记录"
+            tvStatus.text = "未找到对应记录（换个写法试试，比如只输姓氏+名）"
             tvStatus.setTextColor(context.getColor(R.color.warn))
             btnCopy.visibility = View.GONE
+            addUnresolved(context, container, unresolved, onCorrect)
         }
 
         btnSearch.setOnClickListener {
@@ -118,6 +168,32 @@ object ResultCardView {
 
         addOverlay(context, root)
         current = root
+    }
+
+    /** 「这段没认准」的可点纠正项：点一下进手动搜索，改一次就记住 */
+    private fun addUnresolved(
+        context: Context,
+        container: LinearLayout,
+        unresolved: List<String>,
+        onCorrect: ((String) -> Unit)?
+    ) {
+        if (unresolved.isEmpty() || onCorrect == null) return
+        container.addView(TextView(context).apply {
+            text = "以下备注片段没认准，点一下纠正（改一次就会记住）："
+            textSize = 13f
+            setTypeface(null, android.graphics.Typeface.BOLD)
+            setTextColor(context.getColor(R.color.warn))
+            setPadding(0, dp(context, 10), 0, 0)
+        })
+        for (seg in unresolved) {
+            container.addView(TextView(context).apply {
+                text = "▸ $seg"
+                textSize = 15f
+                setTextColor(context.getColor(R.color.purple_700))
+                setPadding(dp(context, 4), dp(context, 6), 0, dp(context, 2))
+                setOnClickListener { onCorrect(seg) }
+            })
+        }
     }
 
     /**
@@ -195,26 +271,34 @@ object ResultCardView {
 
     private fun buildStudentTable(context: Context, name: String, recs: List<Student>): View {
         val sorted = recs.sortedBy { TermUtils.sortKey(it.term) }
-        val maxH = (context.resources.displayMetrics.heightPixels * 0.55).toInt()
-        val scroll = ScrollView(context).apply {
+        val latestKey = sorted.maxOfOrNull { TermUtils.sortKey(it.term) }
+        val maxH = (context.resources.displayMetrics.heightPixels * 0.62).toInt()
+        val vScroll = ScrollView(context).apply {
             layoutParams = LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 maxH
             ).apply { setMargins(0, 4, 0, 0) }
         }
-        val table = TableLayout(context).apply {
-            setBackgroundColor(context.getColor(R.color.card_bg))
-        }
-        // 表头
-        table.addView(headerRow(context, listOf("期数", "学期", "年级", "学校", "手机", "班次", "老师")))
+        // 列宽会超过一屏，所以外面套一层横向滚动
+        val hScroll = android.widget.HorizontalScrollView(context)
+        val table = TableLayout(context)
+        table.addView(headerRow(context, COLUMNS))
         sorted.forEachIndexed { i, s ->
-            table.addView(dataRow(context, listOf(
-                "第${i + 1}期", s.termClean, s.grade ?: "", s.school ?: "",
-                s.phone ?: "", s.classSession ?: "", s.teacher ?: ""
-            )))
+            val isLatest = TermUtils.sortKey(s.term) == latestKey
+            table.addView(
+                dataRow(
+                    context,
+                    listOf(
+                        "第${i + 1}期", s.termClean, s.classSession ?: "", s.teacher ?: "",
+                        s.grade ?: "", s.school ?: "", s.phone ?: ""
+                    ),
+                    isLatest
+                )
+            )
         }
-        scroll.addView(table)
-        return scroll
+        hScroll.addView(table)
+        vScroll.addView(hScroll)
+        return vScroll
     }
 
     private fun headerRow(context: Context, cols: List<String>): TableRow {
@@ -222,23 +306,32 @@ object ResultCardView {
         for (c in cols) {
             row.addView(TextView(context).apply {
                 text = c
-                textSize = 11f
+                textSize = 13f
                 setTypeface(null, android.graphics.Typeface.BOLD)
                 setTextColor(context.getColor(R.color.text_primary))
-                setPadding(4, 4, 4, 4)
+                setBackgroundResource(R.drawable.cell_header)
+                val p = dp(context, 6)
+                setPadding(p, p, p, p)
+                setLineSpacing(dp(context, 3).toFloat(), 1.1f)
             })
         }
         return row
     }
 
-    private fun dataRow(context: Context, cols: List<String>): TableRow {
+    private fun dataRow(context: Context, cols: List<String>, highlight: Boolean): TableRow {
         val row = TableRow(context)
         for (c in cols) {
             row.addView(TextView(context).apply {
                 text = c
-                textSize = 11f
-                setTextColor(context.getColor(R.color.text_secondary))
-                setPadding(4, 4, 4, 4)
+                textSize = 13f
+                setTextColor(context.getColor(R.color.text_primary))
+                if (highlight) setTypeface(null, android.graphics.Typeface.BOLD)
+                setBackgroundResource(
+                    if (highlight) R.drawable.cell_latest else R.drawable.cell
+                )
+                val p = dp(context, 6)
+                setPadding(p, p, p, p)
+                setLineSpacing(dp(context, 3).toFloat(), 1.1f)
             })
         }
         return row
@@ -247,7 +340,8 @@ object ResultCardView {
     private fun buildCopyText(name: String, recs: List<Student>): String = buildString {
         append(name).append("\n")
         recs.sortedBy { TermUtils.sortKey(it.term) }.forEachIndexed { i, s ->
-            append("第${i + 1}期 ${s.termClean}｜${s.grade ?: ""} ${s.school ?: ""}｜${s.phone ?: ""}｜${s.classSession ?: ""} ${s.teacher ?: ""}\n")
+            append("第${i + 1}期 ${s.termClean}｜${s.classSession ?: ""} ${s.teacher ?: ""}｜")
+            append("${s.grade ?: ""} ${s.school ?: ""}｜${s.phone ?: ""}\n")
         }
     }
 
@@ -290,7 +384,7 @@ object ResultCardView {
         currentMenu = root
     }
 
-    fun showManualSearch(context: Context, onSearch: (String) -> Unit) {
+    fun showManualSearch(context: Context, initialText: String = "", onSearch: (String) -> Unit) {
         dismiss()
         val root = View.inflate(context, R.layout.result_card, null) as LinearLayout
         val tvTitle = root.findViewById<TextView>(R.id.tv_title)
@@ -303,6 +397,10 @@ object ResultCardView {
         tvTitle.text = "手动搜索"
         container.visibility = View.GONE
         btnSearch.text = "搜索"
+        if (initialText.isNotEmpty()) {
+            etSearch.setText(initialText)
+            etSearch.setSelection(initialText.length)
+        }
         btnSearch.setOnClickListener {
             val q = etSearch.text.toString().trim()
             if (q.isNotEmpty()) onSearch(q)

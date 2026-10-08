@@ -21,6 +21,7 @@ import android.widget.Toast
 import androidx.core.app.NotificationCompat
 import com.example.studentlookup.App
 import com.example.studentlookup.R
+import com.example.studentlookup.data.model.Student
 import com.example.studentlookup.match.Matcher
 import com.example.studentlookup.ocr.OcrFallback
 import com.example.studentlookup.ui.MenuAction
@@ -28,6 +29,7 @@ import com.example.studentlookup.ui.ResultCardView
 import com.example.studentlookup.util.AccessibilitySupport
 import com.example.studentlookup.util.Diag
 import com.example.studentlookup.util.RomUtils
+import com.example.studentlookup.util.TermUtils
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -40,6 +42,8 @@ class FloatingBallService : Service() {
         private const val TAG = "SLK-Ball"
         private const val CHANNEL_ID = "float_channel"
         private const val NOTIF_ID = 1
+        /** 悬浮球直径（dp）——小一点、半透明，尽量不挡内容 */
+        private const val BALL_DP = 44
         var isRunning = false
     }
 
@@ -113,14 +117,47 @@ class FloatingBallService : Service() {
         super.onDestroy()
     }
 
-    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int = START_STICKY
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        // 调试入口（仅 adb / 本应用可触发；服务未导出）：
+        //   adb shell am startservice -n com.example.studentlookup/.service.FloatingBallService \
+        //       --es debug_query "陈怡彤妈"
+        intent?.getStringExtra("debug_query")?.takeIf { it.isNotBlank() }?.let {
+            Diag.log(this, "Ball", "调试验证查询：$it")
+            // 走和 OCR 完全一样的处理链路（含多段备注拆分）
+            handleOcrText(it)
+        }
+        // 调试入口：对指定图片跑一次 OCR（用于评估识别准确率，不弹卡片）
+        intent?.getStringExtra("debug_ocr_file")?.takeIf { it.isNotBlank() }?.let { file ->
+            CoroutineScope(Dispatchers.IO).launch {
+                val bmp = runCatching {
+                    android.graphics.BitmapFactory.decodeFile(
+                        java.io.File(filesDir, file).absolutePath
+                    )
+                }.getOrNull()
+                if (bmp == null) {
+                    Diag.log(this@FloatingBallService, "OCR", "调试图片读不到：$file")
+                    return@launch
+                }
+                val acc = LookupAccessibilityService.instance
+                val skip = acc?.statusBarHeightPx() ?: 140
+                val t = OcrFallback.recognizeTitleLine(
+                    this@FloatingBallService, bmp, skip, skip * 2
+                )
+                Diag.log(
+                    this@FloatingBallService, "OCR",
+                    "调试识别[$file] 结果=${t ?: "（空）"} 尺寸=${bmp.width}x${bmp.height}"
+                )
+            }
+        }
+        return START_STICKY
+    }
 
     override fun onBind(intent: Intent?): IBinder? = null
 
     private fun addBall(): Boolean {
         ball = LayoutInflater.from(this).inflate(R.layout.floating_ball, null)
         params = WindowManager.LayoutParams(
-            dp(56), dp(56),
+            dp(BALL_DP), dp(BALL_DP),
             WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
             PixelFormat.TRANSLUCENT
@@ -269,7 +306,10 @@ class FloatingBallService : Service() {
                 }
                 val skip = acc.statusBarHeightPx()
                 val title = kotlinx.coroutines.withContext(Dispatchers.IO) {
-                    OcrFallback.recognizeTitleLine(full, skip, skip * 3)
+                    // 只裁标题条那一条：太高会把聊天内容（"已收款"之类）也框进来
+                    OcrFallback.recognizeTitleLine(
+                        this@FloatingBallService, full, skip, (skip * 1.1f).toInt()
+                    )
                 }
                 runCatching { full.recycle() }
                 Diag.log(this@FloatingBallService, "Ball", "OCR 识别标题=${title ?: "（空）"}")
@@ -280,7 +320,7 @@ class FloatingBallService : Service() {
                         listOf("手动搜索" to { showManualSearch() })
                     )
                 } else {
-                    query(title)
+                    handleOcrText(title)
                 }
             }
             return
@@ -335,11 +375,72 @@ class FloatingBallService : Service() {
         ResultCardView.showManualSearch(this) { q -> query(q) }
     }
 
+    /**
+     * 处理 OCR 结果。一个家长可能有多个孩子，微信备注常写成
+     * 「卢映彤,卢怡彤,卢柳含」这种逗号分隔的多段，所以先按分隔符拆开逐段匹配。
+     * 认准的都列出来；认不准的给出「点一下纠正」的入口（纠正一次就记住）。
+     */
+    private fun handleOcrText(ocr: String) {
+        val segs = ocr.split(',', '，', '、', '/', ';', '；', ' ', '\n')
+            .map { it.trim() }
+            .filter { it.length >= 2 }
+        if (segs.size < 2) {
+            query(ocr, fromOcr = true)
+            return
+        }
+        CoroutineScope(Dispatchers.IO).launch {
+            val all = (applicationContext as App).database.studentDao().getAll()
+            val fixes = fixMap()
+            val hits = LinkedHashSet<String>()
+            val unresolved = ArrayList<String>()
+            for (seg in segs) {
+                val resolved = fixes[seg] ?: seg
+                val r = Matcher.match(resolved, all)
+                if (r.found && !r.approximate && r.byName.size == 1) {
+                    hits.add(r.byName.keys.first())
+                } else if (fixes[seg] == null) {
+                    unresolved.add(seg)
+                }
+            }
+            Diag.log(
+                this@FloatingBallService, "OCR",
+                "多段备注：命中=$hits 未认准=${unresolved}"
+            )
+            kotlinx.coroutines.withContext(Dispatchers.Main) {
+                if (hits.isEmpty()) {
+                    query(ocr, fromOcr = true)
+                    return@withContext
+                }
+                val rows = all.filter { it.name in hits }
+                val mr = Matcher.MatchResult(
+                    found = true, approximate = false, query = ocr,
+                    byName = rows.groupBy { it.name }
+                )
+                ResultCardView.show(
+                    this@FloatingBallService, mr,
+                    onManualSearch = { q -> query(q) },
+                    onDump = null,
+                    unresolved = unresolved,
+                    onCorrect = { seg -> startCorrection(seg) }
+                )
+            }
+        }
+    }
+
+    /** 纠正某个认不准的片段：预填到手动搜索框，改好后搜索即被记住 */
+    private fun startCorrection(segment: String) {
+        ResultCardView.showManualSearch(this, initialText = segment) { typed ->
+            rememberFix(segment, typed)
+            toast("已记住：$segment → $typed")
+            query(typed)
+        }
+    }
+
     private fun notifyCard(title: String, message: String, actions: List<Pair<String, () -> Unit>>) {
         ResultCardView.showNotice(this, title, message, actions)
     }
 
-    private fun query(raw: String) {
+    private fun query(raw: String, fromOcr: Boolean = false) {
         // 隐藏的运行时校准入口：手动搜索框里输入 `id:com.tencent.mm:id/xxx`
         if (raw.startsWith("id:")) {
             val id = raw.removePrefix("id:").trim()
@@ -349,9 +450,14 @@ class FloatingBallService : Service() {
             }
             return
         }
+        // OCR 纠正记忆：同一个备注名被认错过一次后，下次直接给正确姓名
+        val key = if (fromOcr) raw else null
+        val q = if (key != null) fixMap()[key] ?: raw else raw
+        if (key != null && q != raw) Diag.log(this, "OCR", "命中纠正记忆：$raw -> $q")
         CoroutineScope(Dispatchers.IO).launch {
             val all = (applicationContext as App).database.studentDao().getAll()
-            val result = Matcher.match(raw, all)
+            val result = Matcher.match(q, all)
+            val siblings = computeSiblings(result, all)
             kotlinx.coroutines.withContext(Dispatchers.Main) {
                 ResultCardView.show(this@FloatingBallService, result,
                     onManualSearch = { q -> query(q) },
@@ -364,10 +470,59 @@ class FloatingBallService : Service() {
                             )
                         }
                         dump
+                    },
+                    siblings = siblings,
+                    onPick = { picked ->
+                        if (key != null) rememberFix(key, picked)
+                        query(picked)
                     }
                 )
             }
         }
+    }
+
+    // ---- OCR 纠正记忆（同一家长会反复出现，认错一次就记住） ----
+
+    private fun fixMap(): Map<String, String> =
+        getSharedPreferences("app_state", MODE_PRIVATE)
+            .getString("ocr_fix", "").orEmpty()
+            .split('\n')
+            .filter { it.contains('=') }
+            .associate { it.substringBefore('=') to it.substringAfter('=') }
+
+    private fun rememberFix(rawOcr: String, name: String) {
+        val m = fixMap().toMutableMap()
+        m[rawOcr] = name
+        getSharedPreferences("app_state", MODE_PRIVATE).edit()
+            .putString("ocr_fix", m.entries.joinToString("\n") { "${it.key}=${it.value}" })
+            .apply()
+        Diag.log(this, "OCR", "记住纠正：$rawOcr -> $name")
+    }
+
+    /**
+     * 一个家长可能有多个孩子：用手机号归组，把「同一家长的其他孩子」一并列出来，
+     * 这样客服在同一个聊天里就能回答任何一个孩子的情况。只在唯一命中时给，避免误导。
+     */
+    private fun computeSiblings(
+        result: Matcher.MatchResult,
+        all: List<Student>
+    ): List<Pair<String, String>> {
+        if (result.byName.size != 1) return emptyList()
+        val (name, recs) = result.byName.entries.first()
+        val phone = recs.asSequence()
+            .mapNotNull { it.phone?.trim() }
+            .firstOrNull { it.isNotEmpty() } ?: return emptyList()
+        val others = all.filter { it.name != name && it.phone?.trim() == phone }
+        if (others.isEmpty()) return emptyList()
+        return others.groupBy { it.name }.map { (n, rs) ->
+            val latest = rs.maxByOrNull { TermUtils.sortKey(it.term) }
+            val info = if (latest == null) "" else listOf(
+                TermUtils.clean(latest.term),
+                latest.classSession ?: "",
+                latest.teacher ?: ""
+            ).filter { it.isNotBlank() }.joinToString(" ")
+            n to info
+        }.sortedBy { it.first }
     }
 
     private fun showMenu() {
@@ -426,7 +581,7 @@ class FloatingBallService : Service() {
                 MotionEvent.ACTION_UP -> {
                     // 贴边：吸附到最近一侧
                     val screenW = resources.displayMetrics.widthPixels
-                    params.x = if (params.x < screenW / 2) 0 else screenW - dp(56)
+                    params.x = if (params.x < screenW / 2) 0 else screenW - dp(BALL_DP)
                     wm.updateViewLayout(ball, params)
                     if (moved) return true // 拖动不触发点击
                 }
