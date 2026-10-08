@@ -5,6 +5,11 @@ import com.example.studentlookup.R
 
 /**
  * 悬浮球样式。长按球 → 「更换悬浮球样式」可现场切换（带预览），选中即保存到本机。
+ *
+ * ⚠️ 改球的大小只需要改这里的 [widthDp] / [heightDp]：
+ * - 窗口尺寸、内部文字、贴边吸附位置都用同一组值，改一处即可；
+ * - 不影响卡片、菜单、识别等任何其它功能；
+ * - res/layout/floating_ball.xml 里的尺寸不生效（会被 WindowManager 参数覆盖），不用动它。
  */
 enum class BallStyle(
     val label: String,

@@ -616,7 +616,12 @@ object ResultCardView {
         val hScroll = HorizontalScrollView(context).apply { isFillViewport = true }
         val table = TableLayout(context)
         // 表头
-        table.addView(matrixRow(context, listOf("序号", "姓名") + terms, Style.HEADER, null, null))
+        table.addView(
+            matrixRow(
+                context, listOf("序号", "姓名") + terms.map { splitTerm(it) },
+                Style.HEADER, null, null
+            )
+        )
         students.forEachIndexed { i, st ->
             val cells = ArrayList<String>()
             cells.add("${i + 1}")
@@ -660,7 +665,13 @@ object ResultCardView {
         current = root
     }
 
-    /** 对照表的一行；sticky 列不做（悬浮层里实现成本高），姓名列可点 */
+    /** 学期名拆两行显示，列更窄、更好看：2026秋季 -> "2026\n秋季" */
+    private fun splitTerm(clean: String): String {
+        val m = Regex("^(\\d{4})(.*)$").find(clean) ?: return clean
+        return m.groupValues[1] + "\n" + m.groupValues[2]
+    }
+
+    /** 对照表的一行；姓名列可点 */
     private fun matrixRow(
         context: Context,
         cols: List<String>,
@@ -673,10 +684,11 @@ object ResultCardView {
             val isNameCol = idx == 1 && studentIndex != null
             val tv = TextView(context).apply {
                 this.text = text
-                textSize = 13f
+                textSize = 12f
                 gravity = Gravity.CENTER
-                setPadding(dp(context, 8), dp(context, 7), dp(context, 8), dp(context, 7))
-                setLineSpacing(dp(context, 2).toFloat(), 1.05f)
+                setPadding(dp(context, 6), dp(context, 6), dp(context, 6), dp(context, 6))
+                setLineSpacing(0f, 1.0f)
+                minWidth = dp(context, if (idx == 0) 44 else if (idx == 1) 78 else 86)
                 when (style) {
                     Style.HEADER -> {
                         setTypeface(null, Typeface.BOLD)
@@ -684,12 +696,22 @@ object ResultCardView {
                         setBackgroundResource(R.drawable.cell_header)
                     }
                     else -> {
-                        setBackgroundResource(if (text.isBlank()) R.drawable.cell_empty else R.drawable.cell)
-                        if (text.isBlank()) setTextColor(0xFF9AA0A6.toInt())
-                        else setTextColor(context.getColor(R.color.text_primary))
-                        if (isNameCol) {
-                            setTypeface(null, Typeface.BOLD)
-                            setTextColor(context.getColor(R.color.purple_700))
+                        if (idx <= 1) {
+                            // 序号 / 姓名两列：固定列，不参与"参加与否"配色
+                            setBackgroundResource(R.drawable.cell)
+                            if (isNameCol) {
+                                setTypeface(null, Typeface.BOLD)
+                                setTextColor(context.getColor(R.color.purple_700))
+                                textSize = 14f
+                            } else {
+                                setTextColor(context.getColor(R.color.text_secondary))
+                            }
+                        } else if (text.isBlank()) {
+                            setBackgroundResource(R.drawable.cell_empty)
+                            setTextColor(0xFFB0B4BA.toInt())
+                        } else {
+                            setBackgroundResource(R.drawable.cell_attend)
+                            setTextColor(0xFF2E6B1F.toInt())
                         }
                     }
                 }

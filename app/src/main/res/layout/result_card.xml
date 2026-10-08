@@ -48,7 +48,7 @@
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
                 android:layout_weight="1"
-                android:hint="识别不准？这里直接改了再搜"
+                android:hint="手动搜索"
                 android:inputType="text"
                 android:maxLines="1"
                 android:textSize="15sp" />

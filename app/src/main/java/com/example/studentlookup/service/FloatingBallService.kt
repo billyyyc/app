@@ -524,11 +524,14 @@ class FloatingBallService : Service() {
                     hits.add(r.byName.keys.first())
                     continue
                 }
-                // 认不准的：用学员库找最像的（三个字里错一个 → 距离 1），作为「待确认」候选给出
-                val top = Matcher.rankSimilar(resolved, all, 1).firstOrNull()
-                if (top != null && top.second <= 1 && top.first.length == resolved.length) {
-                    hits.add(top.first)
-                    approx[top.first] = seg
+                // 认不准的：用学员库找最像的（三个字里错一个 → 距离 1），作为「待确认」候选给出。
+                // 关键：要跳过"本轮已经用掉的姓名"——否则像 叶莞宜 这种情况，
+                // 最像的 叶沛宜(距离1) 会先被选中（可它已经对应第一个孩子），第三个孩子就被丢掉。
+                val pick = Matcher.rankSimilar(resolved, all, 6)
+                    .firstOrNull { it.second <= 1 && it.first.length == resolved.length && it.first !in hits }
+                if (pick != null) {
+                    hits.add(pick.first)
+                    approx[pick.first] = seg
                 } else if (fixes[seg] == null) {
                     unresolved.add(seg)
                 }
