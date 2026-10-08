@@ -65,6 +65,15 @@ object OcrFallback {
             return emptyList()
         }
         val t0 = System.currentTimeMillis()
+        // 先用本地 PP-OCRv4（B 方案）识别一次：它专门为中文优化，生僻人名通常比 ML Kit 准
+        val out0 = ArrayList<String>()
+        runCatching {
+            if (PaddleOcr.init(context)) {
+                val tp = System.currentTimeMillis()
+                PaddleOcr.recognize(crop)?.let { out0.add(it) }
+                Diag.log(context, "OCR", "PP-OCR 结果=${out0.firstOrNull() ?: "（空）"} 用时${System.currentTimeMillis() - tp}ms")
+            }
+        }
         val variants = ArrayList<Pair<String, Bitmap>>()
         for ((tag, scale) in scales) {
             // 太大的图 ML Kit 会明显变慢（用户反馈"说 1~3 秒，有时远不止"），这里直接跳过
@@ -77,7 +86,7 @@ object OcrFallback {
             }.getOrNull()
             if (bmp != null) variants.add(tag to bmp)
         }
-        val out = ArrayList<String>()
+        val out = ArrayList<String>(out0)
         for ((tag, bmp) in variants) {
             bestLines(context, bmp, tag).forEach { if (!out.contains(it)) out.add(it) }
             if (bmp !== crop) runCatching { bmp.recycle() }

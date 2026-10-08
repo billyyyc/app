@@ -65,4 +65,7 @@ dependencies {
 
     // 截图 OCR 兜底（中文模型，完全离线、不依赖 GMS，适合国产机）
     implementation("com.google.mlkit:text-recognition-chinese:16.0.0-beta6")
+
+    // 本地 OCR 引擎 B 方案：ONNX Runtime + PP-OCRv4 中文识别模型（离线、纯 Gradle 依赖）
+    implementation("com.microsoft.onnxruntime:onnxruntime-android:1.19.2")
 }
