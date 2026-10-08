@@ -99,9 +99,11 @@ object AccessibilitySupport {
             )
             Settings.Secure.putInt(cr, SECURE_ACCESSIBILITY_ENABLED, 1)
             Log.d(TAG, "rebind requested; before=[$current]")
+            Diag.log(ctx, "A11y", "已请求系统重新绑定无障碍服务")
             true
         } catch (t: Throwable) {
             Log.w(TAG, "rebind failed: ${t.message}")
+            Diag.log(ctx, "A11y", "重新绑定失败：${t.message}")
             false
         }
     }

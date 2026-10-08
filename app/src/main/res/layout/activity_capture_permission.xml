@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:padding="24dp">
+
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="开启「截图识别」（可选）"
+        android:textSize="20sp"
+        android:textStyle="bold"
+        android:textColor="@color/text_primary" />
+
+    <TextView
+        android:id="@+id/tv_capture_status"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="12dp"
+        android:text="用途：当无障碍读不到微信标题时，截取屏幕顶部一小条交给本地 OCR 识别姓名。\n只会用到顶部标题区域，不保存、不上传任何画面。\n\n平时用不到可以不开，不影响手动搜索和主流程。"
+        android:textSize="14sp"
+        android:textColor="@color/text_secondary" />
+
+    <Button
+        android:id="@+id/btn_capture_start"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="20dp"
+        android:text="开始授权" />
+
+    <Button
+        android:id="@+id/btn_capture_close"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
+        android:text="关闭" />
+
+</LinearLayout>

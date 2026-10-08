@@ -1,6 +1,8 @@
 package com.example.studentlookup.ui
 
 import android.Manifest
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -18,6 +20,7 @@ import com.example.studentlookup.data.import.DataImporter
 import com.example.studentlookup.databinding.ActivityMainBinding
 import com.example.studentlookup.service.FloatingBallService
 import com.example.studentlookup.util.AccessibilitySupport
+import com.example.studentlookup.util.Diag
 import com.example.studentlookup.util.RomUtils
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -66,12 +69,24 @@ class MainActivity : AppCompatActivity() {
         binding.btnOcr.setOnClickListener {
             Toast.makeText(
                 this,
-                "接下来会弹出「开始录制/屏幕采集」授权，请点允许：仅用于识别微信标题，不会保存画面。",
+                "可选功能：仅用于无障碍读不到标题时识别顶部标题，不会保存或上传画面。",
                 Toast.LENGTH_LONG
             ).show()
             startActivity(Intent(this, CapturePermissionActivity::class.java))
         }
+        binding.btnDiagCopy.setOnClickListener {
+            val text = Diag.text(this, 60)
+            val cm = getSystemService(CLIPBOARD_SERVICE) as ClipboardManager
+            cm.setPrimaryClip(ClipData.newPlainText("diag", text))
+            Toast.makeText(this, "已复制运行记录", Toast.LENGTH_SHORT).show()
+        }
+        binding.btnDiagClear.setOnClickListener {
+            Diag.clear(this)
+            refreshDiag()
+            Toast.makeText(this, "已清空", Toast.LENGTH_SHORT).show()
+        }
 
+        Diag.log(this, "App", "打开首页")
         refreshDataInfo()
     }
 
@@ -80,6 +95,12 @@ class MainActivity : AppCompatActivity() {
         updatePermissionStatus()
         // 刚回到前台时无障碍服务可能还在重连，稍后再确认一次，避免误报「未连接」
         binding.root.postDelayed({ updatePermissionStatus() }, 900)
+        refreshDiag()
+    }
+
+    private fun refreshDiag() {
+        val t = Diag.text(this, 20)
+        binding.tvDiag.text = if (t.isBlank()) "（暂无）" else t
     }
 
     private fun updatePermissionStatus() {
@@ -102,6 +123,10 @@ class MainActivity : AppCompatActivity() {
             if (accEnabled) android.view.View.GONE else android.view.View.VISIBLE
         binding.btnRepair.visibility =
             if (accEnabled && !accConnected) android.view.View.VISIBLE else android.view.View.GONE
+        Diag.log(
+            this, "App",
+            "权限状态：悬浮窗=${if (overlay) "开" else "关"} 无障碍已开启=$accEnabled 已连接=$accConnected"
+        )
     }
 
     /** 「修复无障碍连接」：解除「设置里已开启、但服务没真正运行」的假死态。 */

@@ -25,6 +25,7 @@ import com.example.studentlookup.ocr.OcrFallback
 import com.example.studentlookup.ui.MenuAction
 import com.example.studentlookup.ui.ResultCardView
 import com.example.studentlookup.util.AccessibilitySupport
+import com.example.studentlookup.util.Diag
 import com.example.studentlookup.util.RomUtils
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -86,33 +87,40 @@ class FloatingBallService : Service() {
 
     private fun onBallClick() {
         val acc = LookupAccessibilityService.instance
-        Log.d(
-            TAG,
-            "tap: acc=${acc != null} enabled=${AccessibilitySupport.isEnabled(this)} " +
-                "connectedAt=${LookupAccessibilityService.connectedAt}"
-        )
-        if (acc == null) {
-            // 绝不静默失败：无论哪种原因，都给出看得见、点得动的卡片
-            handleAccessibilityNotRunning()
-            return
-        }
-        if (!acc.isInWechat()) {
-            Log.d(TAG, "tap: not in wechat, pkg=${acc.currentPackage}")
-            notifyCard(
-                "当前不在微信对话界面",
-                "请先打开要查询的学员/家长的微信聊天窗口，再点悬浮球。\n" +
-                    "也可以直接在这里手动搜索姓名。",
-                listOf("手动搜索" to { showManualSearch() }, "知道了" to {})
+        // 最外层兜底：这里抛出的异常绝不能冒出去。未捕获异常会杀死整个进程，
+        // 同进程的无障碍服务会被系统判为「无法运行」并自动关掉开关——
+        // 用户看到的现象就是「App 退出 + 权限被关 + 点悬浮球没反应」。
+        try {
+            Diag.log(
+                this, "Ball",
+                "点击：服务实例=${acc != null} 已开启=${AccessibilitySupport.isEnabled(this)}"
             )
-            return
-        }
-        val title = acc.readConversationTitle()
-        Log.d(TAG, "tap: title=$title")
-        if (!title.isNullOrBlank()) {
-            query(title)
-        } else {
-            // 兜底：截图 OCR（放到 IO 线程，避免截屏等待阻塞主线程）
-            tryOcr()
+            if (acc == null) {
+                // 绝不静默失败：无论哪种原因，都给出看得见、点得动的卡片
+                handleAccessibilityNotRunning()
+                return
+            }
+            if (!acc.isInWechat()) {
+                Diag.log(this, "Ball", "不在微信（当前包名 ${acc.currentPackage}）")
+                notifyCard(
+                    "当前不在微信对话界面",
+                    "请先打开要查询的学员/家长的微信聊天窗口，再点悬浮球。\n" +
+                        "也可以直接在这里手动搜索姓名。",
+                    listOf("手动搜索" to { showManualSearch() }, "知道了" to {})
+                )
+                return
+            }
+            val title = acc.readConversationTitle()
+            Diag.log(this, "Ball", "读到会话标题：${title ?: "（空）"}")
+            if (!title.isNullOrBlank()) {
+                query(title)
+            } else {
+                // 兜底：截图 OCR（只使用已授权的截屏服务，绝不在这里后台启动它）
+                tryOcr()
+            }
+        } catch (t: Throwable) {
+            Diag.log(this, "Ball", "点击处理异常：${t.javaClass.simpleName} ${t.message}")
+            toast("出错了：${t.javaClass.simpleName}（已记录，可在首页查看运行记录）")
         }
     }
 
@@ -133,6 +141,7 @@ class FloatingBallService : Service() {
 
         // 已开启但没真正绑定（重装 / 被系统清理后的假死态）
         if (!AccessibilitySupport.canSelfRepair(this)) {
+            Diag.log(this, "Ball", "无障碍已开启但未连接，且无自愈权限 → 引导手动关→开")
             notifyCard(
                 "无障碍服务未真正运行",
                 "系统里显示已开启，但没有把它绑定起来（重装 App 或被系统清理后常见）。\n\n" +
@@ -150,7 +159,9 @@ class FloatingBallService : Service() {
         CoroutineScope(Dispatchers.Main).launch {
             val requested = AccessibilitySupport.rebind(this@FloatingBallService)
             delay(1200)
-            if (LookupAccessibilityService.instance != null) {
+            val nowConnected = LookupAccessibilityService.instance != null
+            Diag.log(this@FloatingBallService, "Ball", "自动重连：请求=$requested 已连接=$nowConnected")
+            if (nowConnected) {
                 toast("已重新连接，请再点一次悬浮球")
             } else if (requested) {
                 notifyCard(
@@ -178,14 +189,19 @@ class FloatingBallService : Service() {
 
     /** 无障碍读不到标题时的 OCR 兜底。 */
     private fun tryOcr() {
-        if (!com.example.studentlookup.service.ScreenCaptureService.hasPermission()) {
+        // 只有用户已在 App 内明确授权、且截屏服务正在运行时才走 OCR；
+        // 不在后台启动截屏服务（会被系统拒绝，且可能拖垮进程）。
+        if (ScreenCaptureService.instance == null) {
+            Diag.log(this, "Ball", "读不到标题，且截图识别未开启 → 给出手动搜索")
             notifyCard(
                 "无法读取微信标题",
-                "无障碍没有读到会话标题。可以改用「截图识别」（首次需授权屏幕采集，仅用于识别标题，不保存画面），" +
-                    "或直接手动搜索姓名。",
+                "无障碍没有读到会话标题。\n\n" +
+                    "① 最省事：直接手动搜索姓名；\n" +
+                    "② 或回 App 首页点「开启截图识别」后重试（需授权屏幕采集，仅用于识别标题）；\n" +
+                    "③ 想一劳永逸：在结果卡片点「诊断」，把微信标题控件的 id 记下来（首页有说明）。",
                 listOf(
-                    "授权截图识别" to { requestCapturePermission() },
-                    "手动搜索" to { showManualSearch() }
+                    "手动搜索" to { showManualSearch() },
+                    "开启截图识别" to { requestCapturePermission() }
                 )
             )
             return
@@ -194,6 +210,7 @@ class FloatingBallService : Service() {
         CoroutineScope(Dispatchers.IO).launch {
             val text = OcrFallback.recognizeTop(this@FloatingBallService)
             kotlinx.coroutines.withContext(Dispatchers.Main) {
+                Diag.log(this@FloatingBallService, "Ball", "截图识别结果：${text ?: "（空）"}")
                 if (text.isNullOrBlank()) {
                     notifyCard(
                         "未能识别",

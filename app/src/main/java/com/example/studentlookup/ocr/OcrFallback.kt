@@ -1,8 +1,8 @@
 package com.example.studentlookup.ocr
 
 import android.content.Context
-import android.content.Intent
 import com.example.studentlookup.service.ScreenCaptureService
+import com.example.studentlookup.util.Diag
 import com.google.mlkit.vision.common.InputImage
 import com.google.mlkit.vision.text.chinese.ChineseTextRecognizerOptions
 import com.google.mlkit.vision.text.TextRecognition
@@ -23,29 +23,16 @@ object OcrFallback {
 
     /**
      * 识别顶部区域文本。返回最可能的备注名（首行），失败返回 null。
-     * 若尚未授权屏幕采集，会拉起授权页；此时本次返回 null，下次再点即可生效。
+     *
+     * ⚠️ 这里**绝不**启动截屏服务：Android 12+ 从后台启动 mediaProjection 型前台服务会被
+     * 系统拒绝，异常还可能把整个进程带走（进程死 → 无障碍服务被判「无法运行」→ 开关被关掉）。
+     * 只使用「用户已在 App 内明确授权并已运行」的截屏服务。
      */
     suspend fun recognizeTop(context: Context): String? {
-        if (!ScreenCaptureService.hasPermission()) {
-            // Android 14 对后台启动 Activity 有限制，失败不应拖垮进程
-            runCatching {
-                context.startActivity(
-                    Intent(context, com.example.studentlookup.ui.CapturePermissionActivity::class.java)
-                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                )
-            }
+        val svc = ScreenCaptureService.instance ?: run {
+            Diag.log(context, "OCR", "截屏服务未运行，跳过截图识别")
             return null
         }
-        val svc = ScreenCaptureService.instance ?: run {
-            // 服务未运行则重启；Android 14 对后台启动 mediaProjection 型 FGS 有限制，
-            // 失败只放弃本次 OCR，绝不能抛异常导致进程崩溃（会连带杀死无障碍服务）
-            runCatching {
-                ScreenCaptureService.lastData?.let {
-                    ScreenCaptureService.startWithPermission(context, ScreenCaptureService.lastResultCode, it)
-                }
-            }
-            ScreenCaptureService.instance
-        } ?: return null
 
         val bitmap = svc.captureTopRegion(0.18f) ?: return null
         val text = recognize(bitmap) ?: return null

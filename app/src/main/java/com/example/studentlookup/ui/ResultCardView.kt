@@ -4,6 +4,7 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.graphics.PixelFormat
+import android.util.Log
 import android.view.Gravity
 import android.view.View
 import android.view.WindowManager
@@ -279,7 +280,13 @@ object ResultCardView {
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
             PixelFormat.TRANSLUCENT
         ).apply { gravity = Gravity.CENTER }
-        wm.addView(root, params)
+        try {
+            wm.addView(root, params)
+        } catch (t: Throwable) {
+            Log.w("SLK-Card", "菜单 addView 失败: ${t.message}")
+            Toast.makeText(context, "菜单无法显示（悬浮窗权限可能被系统关闭）", Toast.LENGTH_LONG).show()
+            return
+        }
         currentMenu = root
     }
 
@@ -306,12 +313,22 @@ object ResultCardView {
     }
 
     fun dismiss() {
-        current?.let { v -> (v.context.getSystemService(Context.WINDOW_SERVICE) as WindowManager).removeView(v) }
+        current?.let { v ->
+            try {
+                (v.context.getSystemService(Context.WINDOW_SERVICE) as WindowManager).removeView(v)
+            } catch (t: Throwable) {
+                Log.w("SLK-Card", "removeView 失败: ${t.message}")
+            }
+        }
         current = null
     }
 
     private fun remove(context: Context, v: View) {
-        (context.getSystemService(Context.WINDOW_SERVICE) as WindowManager).removeView(v)
+        try {
+            (context.getSystemService(Context.WINDOW_SERVICE) as WindowManager).removeView(v)
+        } catch (t: Throwable) {
+            Log.w("SLK-Card", "removeView 失败: ${t.message}")
+        }
     }
 
     private fun addOverlay(context: Context, root: View) {
@@ -326,7 +343,13 @@ object ResultCardView {
         root.setOnClickListener { dismiss() }
         val card = root.findViewById<View>(R.id.card_root)
         card?.setOnClickListener { /* 阻止关闭 */ }
-        wm.addView(root, params)
+        // 浮层加不上（例如悬浮窗权限被系统收回）绝不能崩掉整个进程
+        try {
+            wm.addView(root, params)
+        } catch (t: Throwable) {
+            Log.w("SLK-Card", "addView 失败: ${t.message}")
+            Toast.makeText(context, "浮层无法显示（悬浮窗权限可能被系统关闭）", Toast.LENGTH_LONG).show()
+        }
     }
 
     private fun copy(context: Context, text: String) {
