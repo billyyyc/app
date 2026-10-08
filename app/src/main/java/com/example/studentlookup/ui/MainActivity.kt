@@ -88,7 +88,8 @@ class MainActivity : AppCompatActivity() {
         val q = intent?.getStringExtra("debug_query")?.takeIf { it.isNotBlank() }
         val f = intent?.getStringExtra("debug_ocr_file")?.takeIf { it.isNotBlank() }
         val b = intent?.getStringExtra("debug_ball")
-        if (q == null && f == null && b == null) return
+        val s = intent?.getStringExtra("debug_suggest")
+        if (q == null && f == null && b == null && s == null) return
         if (q != null) Diag.log(this, "App", "调试验证查询：$q")
         if (f != null) Diag.log(this, "App", "调试验证OCR：$f")
         runCatching {
@@ -97,6 +98,7 @@ class MainActivity : AppCompatActivity() {
                     if (q != null) putExtra("debug_query", q)
                     if (f != null) putExtra("debug_ocr_file", f)
                     if (b != null) putExtra("debug_ball", b)
+                    if (s != null) putExtra("debug_suggest", s)
                 }
             )
         }

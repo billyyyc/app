@@ -49,6 +49,8 @@ object ResultCardView {
     private var currentContainer: LinearLayout? = null
     private var currentStatus: TextView? = null
     private var currentCopy: Button? = null
+    private var suggestScroll: ScrollView? = null
+    private var suggestList: LinearLayout? = null
     private val liveHandler = android.os.Handler(android.os.Looper.getMainLooper())
     private var liveRunnable: Runnable? = null
 
@@ -88,6 +90,8 @@ object ResultCardView {
         currentContainer = container
         currentStatus = tvStatus
         currentCopy = btnCopy
+        suggestScroll = root.findViewById(R.id.scroll_suggest)
+        suggestList = root.findViewById(R.id.suggest_list)
 
         tvTitle.text = title ?: "查询：${result.query}"
         if (prefill.isNotEmpty()) {
@@ -143,6 +147,62 @@ object ResultCardView {
             context, container, status, currentCopy, result, grid,
             emptyList(), emptyList(), null, onPick, onManualSearch
         )
+    }
+
+    /**
+     * 输入框下方的联想候选（对齐网页版：完全一致 / 前缀 / 包含，最多 12 条，带滚动）。
+     * items = 姓名 to 说明文字。
+     */
+    fun showSuggestions(items: List<Pair<String, String>>, onPick: (String) -> Unit) {
+        val scroll = suggestScroll ?: return
+        val list = suggestList ?: return
+        list.removeAllViews()
+        if (items.isEmpty()) {
+            scroll.visibility = View.GONE
+            return
+        }
+        items.forEachIndexed { index, (name, kind) ->
+            val row = LinearLayout(list.context).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(dp(list.context, 12), dp(list.context, 9), dp(list.context, 12), dp(list.context, 9))
+                setOnClickListener {
+                    scroll.visibility = View.GONE
+                    onPick(name)
+                }
+            }
+            row.addView(TextView(list.context).apply {
+                text = name
+                textSize = 17f
+                setTextColor(list.context.getColor(R.color.text_primary))
+            })
+            row.addView(TextView(list.context).apply {
+                text = kind
+                textSize = 12f
+                gravity = Gravity.END
+                setTextColor(0xFF999999.toInt())
+                layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT)
+                    .apply { weight = 1f }
+            })
+            list.addView(row)
+            if (index < items.size - 1) {
+                list.addView(View(list.context).apply {
+                    setBackgroundColor(0xFFF0F0F0.toInt())
+                    layoutParams = LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.MATCH_PARENT, dp(list.context, 1)
+                    )
+                })
+            }
+        }
+        val rowH = dp(list.context, 44)
+        (scroll.layoutParams as LinearLayout.LayoutParams).apply {
+            height = (items.size * rowH + dp(list.context, 4)).coerceAtMost(dp(list.context, 250))
+        }
+        scroll.visibility = View.VISIBLE
+    }
+
+    fun hideSuggestions() {
+        suggestScroll?.visibility = View.GONE
     }
 
     /** 把一次匹配结果画进（状态行 + 列表区） */

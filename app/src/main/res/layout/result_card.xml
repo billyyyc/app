@@ -61,6 +61,23 @@
                 android:text="搜索" />
         </LinearLayout>
 
+        <!-- 输入框下方的联想候选（前缀优先，最多 12 条，带滚动） -->
+        <ScrollView
+            android:id="@+id/scroll_suggest"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="-2dp"
+            android:background="@drawable/suggest_panel"
+            android:scrollbars="vertical"
+            android:visibility="gone">
+
+            <LinearLayout
+                android:id="@+id/suggest_list"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical" />
+        </ScrollView>
+
         <ScrollView
             android:id="@+id/scroll_body"
             android:layout_width="match_parent"

@@ -12,5 +12,5 @@
         android:includeFontPadding="false"
         android:text="T"
         android:textColor="#E6FFFFFF"
-        android:textSize="30sp" />
+        android:textSize="40sp" />
 </FrameLayout>

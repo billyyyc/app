@@ -23,6 +23,7 @@ import com.example.studentlookup.App
 import com.example.studentlookup.R
 import com.example.studentlookup.data.model.Student
 import com.example.studentlookup.match.Matcher
+import com.example.studentlookup.match.NameNormalizer
 import com.example.studentlookup.ocr.OcrFallback
 import com.example.studentlookup.ui.MenuAction
 import com.example.studentlookup.ui.ResultCardView
@@ -131,6 +132,14 @@ class FloatingBallService : Service() {
         // 调试入口：直接弹出悬浮球样式选择（用于出效果图）
         if (intent?.getStringExtra("debug_ball") != null) {
             showBallStylePicker()
+        }
+        // 调试入口：直接出联想候选（用于出效果图）
+        intent?.getStringExtra("debug_suggest")?.let {
+            showManualSearch()
+            CoroutineScope(Dispatchers.Main).launch {
+                delay(600)
+                liveQuery(it)
+            }
         }
         // 调试入口：对指定图片跑一次 OCR（用于评估识别准确率，不弹卡片）
         intent?.getStringExtra("debug_ocr_file")?.takeIf { it.isNotBlank() }?.let { file ->
@@ -686,22 +695,37 @@ class FloatingBallService : Service() {
     }
 
     /**
-     * 边打字边查：输入停顿 250ms 后原地刷新候选列表（不重建卡片，键盘不会掉、不用按搜索）。
+     * 边打字边联想（对齐网页版 buildSuggest）：完全一致 > 前缀 > 包含，最多 12 条，
+     * 显示在输入框正下方的候选面板里；点名字即查询该生记录。
      */
     private fun liveQuery(text: String) {
-        if (text.length < 2) return
+        if (text.isBlank()) {
+            ResultCardView.hideSuggestions()
+            return
+        }
         CoroutineScope(Dispatchers.IO).launch {
             val all = allStudents()
-            val r = Matcher.match(text, all)
-            val grid = if (r.byName.size == 1) {
-                buildGrid(all.map { it.term }.distinct(), r.byName.values.first())
-            } else emptyList()
+            val q = NameNormalizer.normalize(text)
+            if (q.isEmpty()) return@launch
+            val names = all.map { NameNormalizer.normalize(it.name) }
+                .filter { it.isNotBlank() }
+                .distinct()
+            val scored = names.mapNotNull { n ->
+                val score = when {
+                    n == q -> 0
+                    n.startsWith(q) -> 1
+                    n.contains(q) -> 2
+                    else -> -1
+                }
+                if (score < 0) null else Triple(n, score, n)
+            }
+                .sortedWith(compareBy({ it.second }, { it.third.length }, { it.third }))
+                .take(12)
+            val kinds = listOf("完全一致", "前缀", "包含")
             kotlinx.coroutines.withContext(Dispatchers.Main) {
-                ResultCardView.updateList(
-                    this@FloatingBallService, r, grid,
-                    onManualSearch = { v -> picked(v) },
-                    onPick = { v -> picked(v) }
-                )
+                ResultCardView.showSuggestions(
+                    scored.map { it.first to kinds.getOrElse(it.second) { "" } }
+                ) { name -> picked(name) }
             }
         }
     }
