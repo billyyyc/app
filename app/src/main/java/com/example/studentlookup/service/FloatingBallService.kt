@@ -397,31 +397,29 @@ class FloatingBallService : Service() {
             )
             CoroutineScope(Dispatchers.Main).launch {
                 val skip = acc.statusBarHeightPx()
-                val candidates = LinkedHashSet<String>()
-                var captured = false
-                var scored = 0
-                // 第一帧只用 2x/4x（快）；若在学员库里一无所获，再抓一帧补 3x/1x
-                val plans = listOf(listOf("2x" to 2, "4x" to 4), listOf("3x" to 3, "1x" to 1))
+                // 两帧：先 2x/3x；只要还有"没认准的段"就再抓一帧换 4x/1x 试
+                val plans = listOf(listOf("2x" to 2, "3x" to 3), listOf("4x" to 4, "1x" to 1))
+                var bestText: String? = null
+                var bestScore = -1
                 for ((frame, plan) in plans.withIndex()) {
-                    val full = acc.captureScreen()
-                    if (full != null) {
-                        captured = true
-                        val list = kotlinx.coroutines.withContext(Dispatchers.IO) {
-                            OcrFallback.titleCandidates(
-                                this@FloatingBallService, full, skip, (skip * 1.2f).toInt(), plan
-                            )
-                        }
-                        candidates.addAll(list)
-                        runCatching { full.recycle() }
-                        scored = kotlinx.coroutines.withContext(Dispatchers.IO) {
-                            val all = allStudents()
-                            candidates.maxOfOrNull { scoreText(it, all) } ?: 0
-                        }
+                    val full = acc.captureScreen() ?: continue
+                    val cands = kotlinx.coroutines.withContext(Dispatchers.IO) {
+                        OcrFallback.titleCandidates(
+                            this@FloatingBallService, full, skip, (skip * 1.2f).toInt(), plan
+                        )
                     }
-                    if (scored > 0) break
+                    runCatching { full.recycle() }
+                    if (cands.isEmpty()) continue
+                    val all = kotlinx.coroutines.withContext(Dispatchers.IO) { allStudents() }
+                    for (c in cands) {
+                        val sc = segmentScore(c, all)
+                        if (sc > bestScore) { bestScore = sc; bestText = c }
+                    }
+                    val segCount = splitSegments(bestText.orEmpty()).size
+                    if (bestText != null && segCount > 0 && bestScore >= segCount * 3) break
                     if (frame == 0) delay(180)
                 }
-                if (!captured || candidates.isEmpty()) {
+                if (bestText == null) {
                     Diag.log(this@FloatingBallService, "Ball", "无障碍截屏失败/无候选 → 转手动搜索")
                     notifyCard(
                         "无法读取微信标题",
@@ -430,15 +428,8 @@ class FloatingBallService : Service() {
                     )
                     return@launch
                 }
-                val best = kotlinx.coroutines.withContext(Dispatchers.IO) {
-                    val all = allStudents()
-                    candidates.maxByOrNull { scoreText(it, all) } ?: candidates.first()
-                }
-                Diag.log(
-                    this@FloatingBallService, "Ball",
-                    "OCR 候选=${candidates.joinToString(" | ")} → 选中=$best"
-                )
-                handleOcrText(best)
+                Diag.log(this@FloatingBallService, "Ball", "OCR 选中=${bestText}（得分 $bestScore）")
+                handleOcrText(bestText!!)
             }
             return
         }
@@ -551,6 +542,7 @@ class FloatingBallService : Service() {
                 this@FloatingBallService, "OCR",
                 "多段备注：命中=$hits 未认准=${unresolved}"
             )
+            lastUnresolved = unresolved
             kotlinx.coroutines.withContext(Dispatchers.Main) {
                 if (hits.isEmpty()) {
                     query(ocr, fromOcr = true, prefill = ocr)
@@ -638,10 +630,40 @@ class FloatingBallService : Service() {
         val segs = splitSegments(ocrText)
         if (segs.isEmpty() || segs.any { it == name }) return
         val fixes = fixMap()
-        val target = segs.filter { fixes[it] == null }.minByOrNull { Matcher.distance(it, name) }
+        // 优先纠正"没认准的那一段"——否则会把更正记到已经认对的段上（黄烁彤->黄铄轩 就是这么错的）
+        val unresolved = lastUnresolved
+        val target = (unresolved.ifEmpty { segs })
+            .filter { fixes[it] == null }
+            .minByOrNull { Matcher.distance(it, name) }
+            ?: segs.filter { fixes[it] == null }.minByOrNull { Matcher.distance(it, name) }
             ?: return
+        // 若这一段本身就能精确命中库里的名字，说明它没认错，别把它改写掉
+        cachedAll?.let { all ->
+            val m = Matcher.match(target, all)
+            if (m.found && !m.approximate && m.byName.size == 1) return
+        }
         rememberFix(target, correctedRaw)
     }
+
+    /** 按"能认准几段"给一条 OCR 结果打分（全段精确命中 = 段数×3） */
+    private fun segmentScore(text: String, all: List<Student>): Int {
+        var total = 0
+        for (seg in splitSegments(text)) {
+            val r = Matcher.match(fixMap()[seg] ?: seg, all)
+            total += if (r.found && !r.approximate && r.byName.size == 1) {
+                3
+            } else if (r.found) {
+                2
+            } else {
+                val d = Matcher.rankSimilar(seg, all, 1).firstOrNull()?.second ?: 9
+                if (d <= 1) 2 else if (d == 2) 1 else 0
+            }
+        }
+        return total
+    }
+
+    /** 上一次识别里"没认准"的片段，用于把用户的更正记到正确的段上 */
+    private var lastUnresolved: List<String> = emptyList()
 
     private fun backAction(): (() -> Unit)? {
         if (history.isEmpty()) return null
