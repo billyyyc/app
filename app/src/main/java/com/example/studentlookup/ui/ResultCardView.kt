@@ -39,6 +39,11 @@ object ResultCardView {
 
     private var current: View? = null
     private var currentMenu: View? = null
+    private var currentContainer: LinearLayout? = null
+    private var currentStatus: TextView? = null
+    private var currentCopy: Button? = null
+    private val liveHandler = android.os.Handler(android.os.Looper.getMainLooper())
+    private var liveRunnable: Runnable? = null
 
     fun show(
         context: Context,
@@ -55,7 +60,9 @@ object ResultCardView {
         onCorrect: ((String) -> Unit)? = null,
         /** 上一步（点候选进来的），非空时显示「返回」 */
         onBack: (() -> Unit)? = null,
-        grid: List<GridRow> = emptyList()
+        grid: List<GridRow> = emptyList(),
+        /** 边打字边查：输入停顿 250ms 后回调一次（不用按搜索就出候选） */
+        onLiveSearch: ((String) -> Unit)? = null
     ) {
         dismiss()
         val root = View.inflate(context, R.layout.result_card, null) as LinearLayout
@@ -69,6 +76,10 @@ object ResultCardView {
         val btnClose = root.findViewById<Button>(R.id.btn_close)
         val btnBack = root.findViewById<Button>(R.id.btn_back)
 
+        currentContainer = container
+        currentStatus = tvStatus
+        currentCopy = btnCopy
+
         tvTitle.text = "查询：${result.query}"
         if (prefill.isNotEmpty()) {
             etSearch.setText(prefill)
@@ -79,6 +90,68 @@ object ResultCardView {
             btnBack.setOnClickListener { onBack.invoke() }
         }
 
+        render(
+            context, container, tvStatus, btnCopy, result, grid,
+            siblings, unresolved, onCorrect, onPick, onManualSearch
+        )
+
+        btnSearch.setOnClickListener {
+            val q = etSearch.text.toString().trim()
+            if (q.isNotEmpty()) onManualSearch(q)
+        }
+        if (onLiveSearch != null) {
+            etSearch.addTextChangedListener(object : android.text.TextWatcher {
+                override fun afterTextChanged(s: android.text.Editable?) {
+                    val t = s?.toString()?.trim().orEmpty()
+                    liveRunnable?.let { liveHandler.removeCallbacks(it) }
+                    if (t.isEmpty()) return
+                    val r = Runnable { onLiveSearch.invoke(t) }
+                    liveRunnable = r
+                    liveHandler.postDelayed(r, 250)
+                }
+
+                override fun beforeTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
+                override fun onTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
+            })
+        }
+        btnClose.setOnClickListener { dismiss() }
+
+        addOverlay(context, root)
+        current = root
+    }
+
+    /** 边打字边更新：只换列表内容，卡片不重建（输入框和键盘都不受影响） */
+    fun updateList(
+        context: Context,
+        result: Matcher.MatchResult,
+        grid: List<GridRow>,
+        onManualSearch: (String) -> Unit,
+        onPick: ((String) -> Unit)? = null
+    ) {
+        val container = currentContainer ?: return
+        val status = currentStatus ?: return
+        render(
+            context, container, status, currentCopy, result, grid,
+            emptyList(), emptyList(), null, onPick, onManualSearch
+        )
+    }
+
+    /** 把一次匹配结果画进（状态行 + 列表区） */
+    private fun render(
+        context: Context,
+        container: LinearLayout,
+        tvStatus: TextView,
+        btnCopy: Button?,
+        result: Matcher.MatchResult,
+        grid: List<GridRow>,
+        siblings: List<Pair<String, String>>,
+        unresolved: List<String>,
+        onCorrect: ((String) -> Unit)?,
+        onPick: ((String) -> Unit)?,
+        onManualSearch: (String) -> Unit
+    ) {
+        container.removeAllViews()
+        btnCopy?.visibility = View.GONE
         if (result.found) {
             when {
                 result.byName.size == 1 -> {
@@ -94,8 +167,8 @@ object ResultCardView {
                         }
                     }
                     addUnresolved(context, container, unresolved, onCorrect)
-                    btnCopy.visibility = View.VISIBLE
-                    btnCopy.setOnClickListener {
+                    btnCopy?.visibility = View.VISIBLE
+                    btnCopy?.setOnClickListener {
                         copy(context, buildCopyText(name, recs))
                         Toast.makeText(context, "已复制", Toast.LENGTH_SHORT).show()
                     }
@@ -105,40 +178,27 @@ object ResultCardView {
                     tvStatus.setTextColor(context.getColor(R.color.text_secondary))
                     val names = result.suggestions.ifEmpty { result.names.sorted() }
                     for (n in names) {
-                        container.addView(chip(context, "▸ $n", 16f) { onManualSearch(n) })
+                        container.addView(chip(context, "▸ $n", 17f) { onManualSearch(n) })
                     }
                     addUnresolved(context, container, unresolved, onCorrect)
-                    btnCopy.visibility = View.GONE
                 }
                 else -> {
-                    tvStatus.text = "命中 ${result.byName.size} 个，请把姓名写全一点"
+                    tvStatus.text = "命中 ${result.byName.size} 个，再打一个字缩小范围"
                     tvStatus.setTextColor(context.getColor(R.color.warn))
-                    btnCopy.visibility = View.GONE
                 }
             }
         } else if (result.suggestions.isNotEmpty()) {
-            tvStatus.text = "没精确命中，请点选最像的："
+            tvStatus.text = "没精确命中，点最像的："
             tvStatus.setTextColor(context.getColor(R.color.warn))
             for (n in result.suggestions) {
-                container.addView(chip(context, "▸ $n", 16f) { (onPick ?: onManualSearch)(n) })
+                container.addView(chip(context, "▸ $n", 17f) { (onPick ?: onManualSearch)(n) })
             }
             addUnresolved(context, container, unresolved, onCorrect)
-            btnCopy.visibility = View.GONE
         } else {
-            tvStatus.text = "未找到对应记录，改一下上面的搜索词试试"
+            tvStatus.text = "没有匹配，换个写法试试"
             tvStatus.setTextColor(context.getColor(R.color.warn))
-            btnCopy.visibility = View.GONE
             addUnresolved(context, container, unresolved, onCorrect)
         }
-
-        btnSearch.setOnClickListener {
-            val q = etSearch.text.toString().trim()
-            if (q.isNotEmpty()) onManualSearch(q)
-        }
-        btnClose.setOnClickListener { dismiss() }
-
-        addOverlay(context, root)
-        current = root
     }
 
     // ---------- 表格 ----------

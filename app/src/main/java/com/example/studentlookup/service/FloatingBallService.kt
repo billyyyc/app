@@ -410,7 +410,7 @@ class FloatingBallService : Service() {
                     return@launch
                 }
                 val best = kotlinx.coroutines.withContext(Dispatchers.IO) {
-                    val all = (applicationContext as App).database.studentDao().getAll()
+                    val all = allStudents()
                     val raw = candidates.maxByOrNull { scoreText(it, all) } ?: candidates.first()
                     // 用学到的字形纠正再试一次，谁在库里对得上就用谁
                     val fixed = applyCharFixes(raw)
@@ -486,7 +486,7 @@ class FloatingBallService : Service() {
             return
         }
         CoroutineScope(Dispatchers.IO).launch {
-            val all = (applicationContext as App).database.studentDao().getAll()
+            val all = allStudents()
             val fixes = fixMap()
             val hits = LinkedHashSet<String>()
             val unresolved = ArrayList<String>()
@@ -590,7 +590,7 @@ class FloatingBallService : Service() {
             Diag.log(this, "OCR", "命中纠正记忆：${q.raw} -> $resolved")
         }
         CoroutineScope(Dispatchers.IO).launch {
-            val all = (applicationContext as App).database.studentDao().getAll()
+            val all = allStudents()
             val result = Matcher.match(resolved, all)
             val siblings = computeSiblings(result, all)
             val grid = if (result.byName.size == 1) {
@@ -609,7 +609,43 @@ class FloatingBallService : Service() {
                     unresolved = if (key != null && !result.found) listOf(q.raw) else emptyList(),
                     onCorrect = { seg -> startCorrection(seg) },
                     onBack = backAction(),
-                    grid = grid
+                    grid = grid,
+                    onLiveSearch = { text -> liveQuery(text) }
+                )
+            }
+        }
+    }
+
+    // ---- 学生库缓存（边打字边查要快，别每次都读 1.2 万行） ----
+
+    private var cachedAll: List<Student>? = null
+    private var cacheStamp = -1L
+
+    private suspend fun allStudents(): List<Student> {
+        val stamp = prefs().getLong("last_import", 0L)
+        cachedAll?.let { if (stamp == cacheStamp) return it }
+        val list = (applicationContext as App).database.studentDao().getAll()
+        cachedAll = list
+        cacheStamp = stamp
+        return list
+    }
+
+    /**
+     * 边打字边查：输入停顿 250ms 后原地刷新候选列表（不重建卡片，键盘不会掉、不用按搜索）。
+     */
+    private fun liveQuery(text: String) {
+        if (text.length < 2) return
+        CoroutineScope(Dispatchers.IO).launch {
+            val all = allStudents()
+            val r = Matcher.match(text, all)
+            val grid = if (r.byName.size == 1) {
+                buildGrid(all.map { it.term }.distinct(), r.byName.values.first())
+            } else emptyList()
+            kotlinx.coroutines.withContext(Dispatchers.Main) {
+                ResultCardView.updateList(
+                    this@FloatingBallService, r, grid,
+                    onManualSearch = { v -> picked(v) },
+                    onPick = { v -> picked(v) }
                 )
             }
         }

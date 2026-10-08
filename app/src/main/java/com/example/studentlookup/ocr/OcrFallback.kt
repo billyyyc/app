@@ -61,7 +61,7 @@ object OcrFallback {
             return emptyList()
         }
         val variants = ArrayList<Pair<String, Bitmap>>()
-        for ((tag, scale) in listOf("2x" to 2, "3x" to 3, "1x" to 1)) {
+        for ((tag, scale) in listOf("2x" to 2, "4x" to 4, "3x" to 3, "1x" to 1)) {
             val bmp = if (scale == 1) crop else runCatching {
                 Bitmap.createScaledBitmap(crop, crop.width * scale, crop.height * scale, true)
             }.getOrNull()
