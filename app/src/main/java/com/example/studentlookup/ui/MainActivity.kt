@@ -50,8 +50,6 @@ class MainActivity : AppCompatActivity() {
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
 
-        binding.tvRom.text = "机型适配：${RomUtils.getRom().name}\n${RomUtils.guidance()}"
-
         binding.btnImport.setOnClickListener {
             importLauncher.launch(arrayOf(
                 "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",

@@ -1,4 +1,4 @@
 <resources>
-    <string name="app_name">客服学员速查</string>
+    <string name="app_name">学员速查</string>
     <string name="accessibility_desc">用于读取微信当前会话对象的备注名，以便快速查询学员班级与带班老师。本工具不读取任何聊天内容。</string>
 </resources>

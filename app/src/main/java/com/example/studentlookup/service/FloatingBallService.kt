@@ -42,8 +42,8 @@ class FloatingBallService : Service() {
         private const val TAG = "SLK-Ball"
         private const val CHANNEL_ID = "float_channel"
         private const val NOTIF_ID = 1
-        /** 悬浮球直径（dp）——小一点、半透明，尽量不挡内容 */
-        private const val BALL_DP = 44
+        /** 悬浮球直径（dp）——半透明，尽量不挡内容 */
+        private const val BALL_DP = 56
         var isRunning = false
     }
 
@@ -140,12 +140,12 @@ class FloatingBallService : Service() {
                 }
                 val acc = LookupAccessibilityService.instance
                 val skip = acc?.statusBarHeightPx() ?: 140
-                val t = OcrFallback.recognizeTitleLine(
-                    this@FloatingBallService, bmp, skip, skip * 2
+                val t = OcrFallback.titleCandidates(
+                    this@FloatingBallService, bmp, skip, (skip * 1.2f).toInt()
                 )
                 Diag.log(
                     this@FloatingBallService, "OCR",
-                    "调试识别[$file] 结果=${t ?: "（空）"} 尺寸=${bmp.width}x${bmp.height}"
+                    "调试识别[$file] 候选=${t.joinToString(" | ")} 尺寸=${bmp.width}x${bmp.height}"
                 )
             }
         }
@@ -305,23 +305,31 @@ class FloatingBallService : Service() {
                     return@launch
                 }
                 val skip = acc.statusBarHeightPx()
-                val title = kotlinx.coroutines.withContext(Dispatchers.IO) {
-                    // 只裁标题条那一条：太高会把聊天内容（"已收款"之类）也框进来
-                    OcrFallback.recognizeTitleLine(
-                        this@FloatingBallService, full, skip, (skip * 1.1f).toInt()
+                // 多种放大倍率各识别一遍，再用「学员库」当字典挑最可信的一条
+                val candidates = kotlinx.coroutines.withContext(Dispatchers.IO) {
+                    OcrFallback.titleCandidates(
+                        this@FloatingBallService, full, skip, (skip * 1.2f).toInt()
                     )
                 }
                 runCatching { full.recycle() }
-                Diag.log(this@FloatingBallService, "Ball", "OCR 识别标题=${title ?: "（空）"}")
-                if (title.isNullOrBlank()) {
+                if (candidates.isEmpty()) {
+                    Diag.log(this@FloatingBallService, "Ball", "OCR 没有候选行")
                     notifyCard(
                         "未能识别",
                         "没有识别出姓名。请手动输入姓名搜索。",
                         listOf("手动搜索" to { showManualSearch() })
                     )
-                } else {
-                    handleOcrText(title)
+                    return@launch
                 }
+                val best = kotlinx.coroutines.withContext(Dispatchers.IO) {
+                    val all = (applicationContext as App).database.studentDao().getAll()
+                    candidates.maxByOrNull { scoreAgainstDb(it, all) } ?: candidates.first()
+                }
+                Diag.log(
+                    this@FloatingBallService, "Ball",
+                    "OCR 候选=${candidates.joinToString(" | ")} → 选中=$best"
+                )
+                handleOcrText(best)
             }
             return
         }
@@ -381,11 +389,9 @@ class FloatingBallService : Service() {
      * 认准的都列出来；认不准的给出「点一下纠正」的入口（纠正一次就记住）。
      */
     private fun handleOcrText(ocr: String) {
-        val segs = ocr.split(',', '，', '、', '/', ';', '；', ' ', '\n')
-            .map { it.trim() }
-            .filter { it.length >= 2 }
+        val segs = splitSegments(ocr)
         if (segs.size < 2) {
-            query(ocr, fromOcr = true)
+            query(ocr, fromOcr = true, prefill = ocr)
             return
         }
         CoroutineScope(Dispatchers.IO).launch {
@@ -408,7 +414,7 @@ class FloatingBallService : Service() {
             )
             kotlinx.coroutines.withContext(Dispatchers.Main) {
                 if (hits.isEmpty()) {
-                    query(ocr, fromOcr = true)
+                    query(ocr, fromOcr = true, prefill = ocr)
                     return@withContext
                 }
                 val rows = all.filter { it.name in hits }
@@ -416,12 +422,15 @@ class FloatingBallService : Service() {
                     found = true, approximate = false, query = ocr,
                     byName = rows.groupBy { it.name }
                 )
+                currentQ?.let { history.addLast(it) }
+                currentQ = Q(ocr, true, ocr)
                 ResultCardView.show(
                     this@FloatingBallService, mr,
-                    onManualSearch = { q -> query(q) },
-                    onDump = null,
+                    onManualSearch = { q -> picked(q) },
+                    prefill = ocr,
                     unresolved = unresolved,
-                    onCorrect = { seg -> startCorrection(seg) }
+                    onCorrect = { seg -> startCorrection(seg) },
+                    onBack = backAction()
                 )
             }
         }
@@ -429,10 +438,11 @@ class FloatingBallService : Service() {
 
     /** 纠正某个认不准的片段：预填到手动搜索框，改好后搜索即被记住 */
     private fun startCorrection(segment: String) {
+        Diag.log(this, "Ball", "纠正片段：$segment")
         ResultCardView.showManualSearch(this, initialText = segment) { typed ->
             rememberFix(segment, typed)
             toast("已记住：$segment → $typed")
-            query(typed)
+            picked(typed)
         }
     }
 
@@ -440,7 +450,32 @@ class FloatingBallService : Service() {
         ResultCardView.showNotice(this, title, message, actions)
     }
 
-    private fun query(raw: String, fromOcr: Boolean = false) {
+    // ---- 查询 / 返回上一级 ----
+
+    private data class Q(val raw: String, val fromOcr: Boolean, val prefill: String)
+
+    private val history = ArrayDeque<Q>()
+    private var currentQ: Q? = null
+
+    /** 用户点了卡片上的东西（候选/搜索/纠正）→ 记录当前状态，便于「返回」 */
+    private fun picked(newRaw: String, newFromOcr: Boolean = false) {
+        Diag.log(this, "Ball", "点选：$newRaw")
+        query(newRaw, newFromOcr, "", push = true)
+    }
+
+    private fun backAction(): (() -> Unit)? {
+        if (history.isEmpty()) return null
+        return {
+            val prev = history.removeLastOrNull()
+            Diag.log(this, "Ball", "返回上一步")
+            if (prev != null) {
+                currentQ = null
+                query(prev.raw, prev.fromOcr, prev.prefill, push = false)
+            }
+        }
+    }
+
+    private fun query(raw: String, fromOcr: Boolean = false, prefill: String = "", push: Boolean = true) {
         // 隐藏的运行时校准入口：手动搜索框里输入 `id:com.tencent.mm:id/xxx`
         if (raw.startsWith("id:")) {
             val id = raw.removePrefix("id:").trim()
@@ -450,35 +485,83 @@ class FloatingBallService : Service() {
             }
             return
         }
+        if (push) currentQ?.let { history.addLast(it) }
+        showQuery(Q(raw, fromOcr, prefill))
+    }
+
+    private fun showQuery(q: Q) {
+        currentQ = q
         // OCR 纠正记忆：同一个备注名被认错过一次后，下次直接给正确姓名
-        val key = if (fromOcr) raw else null
-        val q = if (key != null) fixMap()[key] ?: raw else raw
-        if (key != null && q != raw) Diag.log(this, "OCR", "命中纠正记忆：$raw -> $q")
+        val key = if (q.fromOcr) q.raw else null
+        val resolved = if (key != null) fixMap()[key] ?: q.raw else q.raw
+        if (key != null && resolved != q.raw) {
+            Diag.log(this, "OCR", "命中纠正记忆：${q.raw} -> $resolved")
+        }
         CoroutineScope(Dispatchers.IO).launch {
             val all = (applicationContext as App).database.studentDao().getAll()
-            val result = Matcher.match(q, all)
+            val result = Matcher.match(resolved, all)
             val siblings = computeSiblings(result, all)
+            val grid = if (result.byName.size == 1) {
+                buildGrid(all.map { it.term }.distinct(), result.byName.values.first())
+            } else emptyList()
             kotlinx.coroutines.withContext(Dispatchers.Main) {
-                ResultCardView.show(this@FloatingBallService, result,
-                    onManualSearch = { q -> query(q) },
-                    onDump = {
-                        val dump = LookupAccessibilityService.instance?.dumpNodes()
-                        if (dump != null) {
-                            val cm = getSystemService(CLIPBOARD_SERVICE) as android.content.ClipboardManager
-                            cm.setPrimaryClip(
-                                android.content.ClipData.newPlainText("dump", dump)
-                            )
-                        }
-                        dump
-                    },
+                ResultCardView.show(
+                    this@FloatingBallService, result,
+                    onManualSearch = { v -> picked(v) },
+                    prefill = q.prefill,
                     siblings = siblings,
                     onPick = { picked ->
                         if (key != null) rememberFix(key, picked)
-                        query(picked)
-                    }
+                        picked(picked)
+                    },
+                    unresolved = if (key != null && !result.found) listOf(q.raw) else emptyList(),
+                    onCorrect = { seg -> startCorrection(seg) },
+                    onBack = backAction(),
+                    grid = grid
                 )
             }
         }
+    }
+
+    private fun splitSegments(s: String): List<String> =
+        s.split(',', '，', '、', '/', ';', '；', ' ', '\n')
+            .map { it.trim() }
+            .filter { it.length >= 2 }
+
+    /** 用学员库给 OCR 候选打分：能精确命中库里的姓名，说明这段识别更可信 */
+    private fun scoreAgainstDb(text: String, all: List<Student>): Int {
+        val segs = splitSegments(text)
+        if (segs.isEmpty()) return 0
+        var score = 0
+        for (seg in segs) {
+            val r = Matcher.match(seg, all)
+            score += when {
+                !r.found -> 0
+                !r.approximate && r.byName.size == 1 -> 3
+                !r.approximate -> 2
+                else -> 1
+            }
+        }
+        return score
+    }
+
+    /**
+     * 按「该生首次就读 ~ 最后就读」的区间，把数据库里所有真实学期列出来，
+     * 没有记录的学期留空（灰色行）——一眼就能看出哪一期没来。
+     * 和网页版 学生查询.html 的 displayTerms 逻辑一致，只是顺序反过来（最新在最上面）。
+     */
+    private fun buildGrid(allTerms: List<String>, recs: List<Student>): List<ResultCardView.GridRow> {
+        if (recs.isEmpty()) return emptyList()
+        val attended = recs.associateBy { it.term }
+        val seqOf = recs.sortedBy { TermUtils.sortKey(it.term) }
+            .mapIndexed { i, s -> s.term to (i + 1) }
+            .toMap()
+        val low = recs.minOf { TermUtils.sortKey(it.term) }
+        val high = recs.maxOf { TermUtils.sortKey(it.term) }
+        return allTerms
+            .filter { TermUtils.sortKey(it) in low..high }
+            .sortedByDescending { TermUtils.sortKey(it) }
+            .map { t -> ResultCardView.GridRow(TermUtils.clean(t), seqOf[t], attended[t]) }
     }
 
     // ---- OCR 纠正记忆（同一家长会反复出现，认错一次就记住） ----

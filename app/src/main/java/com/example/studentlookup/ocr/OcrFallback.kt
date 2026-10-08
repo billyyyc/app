@@ -43,51 +43,52 @@ object OcrFallback {
     }
 
     /**
-     * 对「整屏截图」裁掉顶部状态栏后识别标题行。
-     * @param skipTopPx 从该 y 开始裁（通常是状态栏高度）
-     * @param maxHeightPx 裁剪高度（标题条大致范围，避免把聊天内容也识别进来）
+     * 对「整屏截图」裁掉状态栏后，用多种倍率各识别一遍，返回所有候选行（去重、保持可信度顺序）。
+     * 调用方再用学员库挑最像的那条——单倍率难免认错字，多倍率里往往有一条是对的。
      */
-    suspend fun recognizeTitleLine(
+    suspend fun titleCandidates(
         context: Context,
         full: Bitmap,
         skipTopPx: Int,
         maxHeightPx: Int
-    ): String? {
+    ): List<String> {
         val top = skipTopPx.coerceIn(0, (full.height - 1).coerceAtLeast(0))
         val h = maxHeightPx.coerceIn(1, full.height - top)
         val crop = try {
             Bitmap.createBitmap(full, 0, top, full.width, h)
         } catch (t: Throwable) {
             android.util.Log.w("SLK-OCR", "裁剪失败：${t.message}")
-            return null
+            return emptyList()
         }
-        // 1) 放大 2 倍再识别：微信标题字号偏小，放大后识别率明显更好
-        val up = try {
-            Bitmap.createScaledBitmap(crop, crop.width * 2, crop.height * 2, true)
-        } catch (t: Throwable) {
-            null
+        val variants = ArrayList<Pair<String, Bitmap>>()
+        for ((tag, scale) in listOf("2x" to 2, "3x" to 3, "1x" to 1)) {
+            val bmp = if (scale == 1) crop else runCatching {
+                Bitmap.createScaledBitmap(crop, crop.width * scale, crop.height * scale, true)
+            }.getOrNull()
+            if (bmp != null) variants.add(tag to bmp)
         }
-        if (up != null) {
-            val r = bestLine(context, up, "2x")
-            if (r != null) return r
+        val out = ArrayList<String>()
+        for ((tag, bmp) in variants) {
+            bestLines(context, bmp, tag).forEach { if (!out.contains(it)) out.add(it) }
+            if (bmp !== crop) runCatching { bmp.recycle() }
         }
-        // 2) 原尺寸兜一次（放大反而糊掉的情况）
-        val r2 = bestLine(context, crop, "1x")
-        if (up != null) runCatching { up.recycle() }
-        return r2
+        return out
     }
 
-    private suspend fun bestLine(context: Context, bmp: Bitmap, tag: String): String? {
-        val text = recognize(bmp) ?: return null
+    /** 单次识别取前几行（含逗号的多段优先） */
+    private suspend fun bestLines(context: Context, bmp: Bitmap, tag: String): List<String> {
+        val text = recognize(bmp) ?: return emptyList()
         val lines = text.textBlocks
             .flatMap { it.lines }
             .sortedBy { it.boundingBox?.top ?: 0 }
             .map { it.text.trim() }
             .filter { it.isNotEmpty() }
         Diag.log(context, "OCR", "[$tag] 候选行=${lines.joinToString(" / ")}")
-        // 含逗号的多段（一个备注里几个孩子）优先
-        lines.firstOrNull { (it.contains(',') || it.contains('，')) && it.length >= 4 }?.let { return it }
-        return lines.firstOrNull { looksLikeName(it) } ?: lines.firstOrNull()
+        val out = ArrayList<String>()
+        lines.firstOrNull { (it.contains(',') || it.contains('，')) && it.length >= 4 }?.let { out.add(it) }
+        lines.filter { looksLikeName(it) }.forEach { if (!out.contains(it)) out.add(it) }
+        if (out.isEmpty() && lines.isNotEmpty()) out.add(lines.first())
+        return out.take(3)
     }
 
     /**
