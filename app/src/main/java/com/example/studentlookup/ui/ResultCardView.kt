@@ -630,10 +630,9 @@ object ResultCardView {
                 val rec = st.byTerm[t]
                 cells.add(
                     if (rec == null) ""
-                    // 两行：第一行「年级 班次」，第二行「老师」——三行太挤且高低不齐
-                    else listOf(rec.grade, rec.classSession).filterNotNull()
-                        .filter { it.isNotBlank() }.joinToString(" ") + "\n" +
-                        (rec.teacher ?: "")
+                    // 三行：年级 / 班次 / 老师（缺的留空行，保证每格行数一致）
+                    else listOf(rec.grade ?: "", rec.classSession ?: "", rec.teacher ?: "")
+                        .joinToString("\n")
                 )
             }
             table.addView(matrixRow(context, cells, Style.NORMAL, i, onPickName))
@@ -690,9 +689,10 @@ object ResultCardView {
                 gravity = Gravity.CENTER
                 setPadding(dp(context, 6), dp(context, 6), dp(context, 6), dp(context, 6))
                 setLineSpacing(0f, 1.0f)
-                // 所有格子都至少两行高：序号/姓名与有内容的学期格等高，表格才不会一高一低
-                minLines = 2
-                maxLines = 2
+                // 所有格子统一三行高（= 年级/班次/老师 三行的高度），序号与姓名格也按同样高度，
+                // 这样整张表横竖都齐平，不会一高一低
+                minLines = 3
+                maxLines = 3
                 minWidth = dp(context, if (idx == 0) 44 else if (idx == 1) 78 else 86)
                 when (style) {
                     Style.HEADER -> {
