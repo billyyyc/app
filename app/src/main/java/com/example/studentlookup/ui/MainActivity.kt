@@ -93,16 +93,6 @@ class MainActivity : AppCompatActivity() {
 
         Diag.log(this, "App", "打开首页")
         refreshDataInfo()
-
-        // 进程被系统清掉后，悬浮球会跟着消失；这里按上次状态自动恢复，
-        // 也让 App 立刻回到「前台服务常驻」的状态，避免再次被清理。
-        if (prefs.getBoolean("ball_should_run", false) &&
-            !FloatingBallService.isRunning &&
-            Settings.canDrawOverlays(this)
-        ) {
-            Diag.log(this, "App", "检测到悬浮球此前处于运行状态，自动恢复")
-            startFloatingBall(quiet = true)
-        }
     }
 
     override fun onResume() {
@@ -112,6 +102,24 @@ class MainActivity : AppCompatActivity() {
         binding.root.postDelayed({ updatePermissionStatus() }, 900)
         refreshDiag()
         maybeAutoRepair()
+        maybeAutoStartBall()
+    }
+
+    /**
+     * 自动启动悬浮球。
+     *
+     * 悬浮球背后是一个前台服务，而前台服务正是「进程不被 ColorOS 清掉」的关键——
+     * 进程活着，同进程的无障碍服务才不会掉线。之前把启动交给用户点按钮，
+     * 结果用户没点（或点了没反应），于是进程被反复清理 → 无障碍反复掉线 → 点球没反应。
+     * 现在：只要权限齐、且用户没主动隐藏，打开 App 就自动起。
+     */
+    private fun maybeAutoStartBall() {
+        if (FloatingBallService.isRunning) return
+        if (!Settings.canDrawOverlays(this)) return
+        if (!AccessibilitySupport.isEnabled(this)) return
+        if (prefs.getBoolean("ball_hidden_by_user", false)) return
+        Diag.log(this, "App", "自动启动悬浮球")
+        startFloatingBall(quiet = true)
     }
 
     /**
@@ -181,6 +189,10 @@ class MainActivity : AppCompatActivity() {
                     else -> "已开启 ⚠️ 但未连接（点下方「修复无障碍连接」）"
                 }
             )
+            append("\n")
+            append("悬浮球：").append(
+                if (FloatingBallService.isRunning) "运行中 ✅（通知请保留）" else "未启动 ❌"
+            )
         }
         binding.btnStart.isEnabled = overlay && accEnabled
         binding.btnOpenOverlay.visibility = if (overlay) android.view.View.GONE else android.view.View.VISIBLE
@@ -235,13 +247,26 @@ class MainActivity : AppCompatActivity() {
             if (!quiet) Toast.makeText(this, "悬浮球已在运行", Toast.LENGTH_SHORT).show()
             return
         }
-        startService(Intent(this, FloatingBallService::class.java))
-        Diag.log(this, "App", if (quiet) "自动恢复悬浮球" else "启动悬浮球")
-        Toast.makeText(
-            this,
-            "悬浮球已启动。请让它的通知常驻（别在后台顺手清掉本应用），再到微信里点它",
-            Toast.LENGTH_LONG
-        ).show()
+        // 用户主动点按钮 = 明确想要悬浮球，清掉「用户隐藏过」的标记
+        prefs.edit().putBoolean("ball_hidden_by_user", false).apply()
+        try {
+            startService(Intent(this, FloatingBallService::class.java))
+            Diag.log(this, "App", if (quiet) "自动启动悬浮球" else "手动启动悬浮球")
+            if (!quiet) {
+                Toast.makeText(
+                    this,
+                    "悬浮球已启动。请让它的通知常驻（别在后台顺手清掉本应用），再到微信里点它",
+                    Toast.LENGTH_LONG
+                ).show()
+            }
+        } catch (t: Throwable) {
+            Diag.log(this, "App", "启动悬浮球失败：${t.javaClass.simpleName} ${t.message}")
+            Toast.makeText(
+                this,
+                "悬浮球启动失败：${t.javaClass.simpleName}（已记录，请把运行记录发给技术支持）",
+                Toast.LENGTH_LONG
+            ).show()
+        }
     }
 
     private fun doImport(uri: Uri) {

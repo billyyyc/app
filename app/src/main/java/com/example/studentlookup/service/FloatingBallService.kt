@@ -51,15 +51,31 @@ class FloatingBallService : Service() {
         super.onCreate()
         wm = getSystemService(WINDOW_SERVICE) as WindowManager
         createChannel()
-        // 悬浮球仅显示悬浮视图，不涉及录屏；Android 14 上以 mediaProjection 类型启动 FGS
-        // 若无有效录屏授权会抛 SecurityException 导致闪退（曾致进程崩溃、无障碍服务被判"无法运行"），
-        // 因此用无类型的两参 startForeground。
-        startForeground(NOTIF_ID, buildNotification())
-        addBall()
+        // 悬浮球只显示一个悬浮视图，不涉及录屏，所以用「无类型」的两参 startForeground
+        // （历史上曾误用 mediaProjection 类型，Android 14 无授权时必抛 SecurityException 闪退）。
+        // 前台服务是「进程不被 ColorOS 清掉」的关键；万一启动失败也不能崩，要如实记下来。
+        val fgOk = try {
+            startForeground(NOTIF_ID, buildNotification())
+            true
+        } catch (t: Throwable) {
+            Diag.log(this, "Ball", "startForeground 失败：${t.javaClass.simpleName} ${t.message}")
+            false
+        }
+        if (!fgOk) {
+            Toast.makeText(
+                this,
+                "悬浮球启动被系统拒绝（前台服务不可用），请把运行记录发给技术支持",
+                Toast.LENGTH_LONG
+            ).show()
+            stopSelf()
+            return
+        }
+        if (!addBall()) {
+            stopSelf()
+            return
+        }
         isRunning = true
-        // 记住「用户希望悬浮球开着」，进程被系统清掉后下次打开 App 能自动恢复
-        getSharedPreferences("app_state", MODE_PRIVATE)
-            .edit().putBoolean("ball_should_run", true).apply()
+        Diag.log(this, "Ball", "悬浮球已显示（前台服务已启动）")
         // 启动悬浮球时顺手自愈：ColorOS 清掉进程后无障碍常处于「开着但没绑上」的状态
         CoroutineScope(Dispatchers.Main).launch {
             if (AccessibilitySupport.isEnabled(this@FloatingBallService) &&
@@ -76,10 +92,14 @@ class FloatingBallService : Service() {
     }
 
     override fun onDestroy() {
-        if (::ball.isInitialized) wm.removeView(ball)
+        if (::ball.isInitialized) {
+            try {
+                wm.removeView(ball)
+            } catch (t: Throwable) {
+                Log.w(TAG, "removeView: ${t.message}")
+            }
+        }
         isRunning = false
-        getSharedPreferences("app_state", MODE_PRIVATE)
-            .edit().putBoolean("ball_should_run", false).apply()
         super.onDestroy()
     }
 
@@ -87,7 +107,7 @@ class FloatingBallService : Service() {
 
     override fun onBind(intent: Intent?): IBinder? = null
 
-    private fun addBall() {
+    private fun addBall(): Boolean {
         ball = LayoutInflater.from(this).inflate(R.layout.floating_ball, null)
         params = WindowManager.LayoutParams(
             dp(56), dp(56),
@@ -108,8 +128,9 @@ class FloatingBallService : Service() {
         } catch (t: Throwable) {
             Diag.log(this, "Ball", "悬浮球无法显示：${t.javaClass.simpleName} ${t.message}")
             toast("悬浮球无法显示：请到系统设置里打开「悬浮窗」权限")
-            stopSelf()
+            return false
         }
+        return true
     }
 
     private fun onBallClick() {
@@ -304,7 +325,13 @@ class FloatingBallService : Service() {
             when (it) {
                 MenuAction.MANUAL -> ResultCardView.showManualSearch(this) { q -> query(q) }
                 MenuAction.REFRESH -> toast("数据已在导入时更新，无需刷新")
-                MenuAction.HIDE -> { stopSelf() }
+                MenuAction.HIDE -> {
+                    // 明确记住「是用户自己要隐藏的」，否则下次打开 App 会自动又冒出来
+                    getSharedPreferences("app_state", MODE_PRIVATE)
+                        .edit().putBoolean("ball_hidden_by_user", true).apply()
+                    Diag.log(this, "Ball", "用户隐藏悬浮球")
+                    stopSelf()
+                }
                 MenuAction.SETTINGS -> openAccessibilitySettings()
             }
         }

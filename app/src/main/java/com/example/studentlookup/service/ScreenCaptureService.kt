@@ -87,6 +87,23 @@ class ScreenCaptureService : Service() {
         }
     }
 
+    /**
+     * 空闲自动收工：屏幕采集在系统状态栏一直是"共享中"，长期挂着既不礼貌、
+     * 也容易被 ROM 的隐私/省电策略盯上。这里 90 秒没人用就自动停止。
+     * 代价是下次用截图识别需要重新授权一次（本功能本来就是可选兜底）。
+     */
+    private val idleStop = Runnable {
+        if (instance === this) {
+            Diag.log(this, "Capture", "截图识别空闲超时，自动停止屏幕采集")
+            stopSelf()
+        }
+    }
+
+    private fun scheduleIdleStop() {
+        handler.removeCallbacks(idleStop)
+        handler.postDelayed(idleStop, 90_000L)
+    }
+
     override fun onCreate() {
         super.onCreate()
         projectionManager = getSystemService(MediaProjectionManager::class.java)
@@ -123,6 +140,7 @@ class ScreenCaptureService : Service() {
             }
             projection?.registerCallback(projectionCallback, handler)
         }
+        scheduleIdleStop()
     }
 
     override fun onDestroy() {
@@ -177,6 +195,7 @@ class ScreenCaptureService : Service() {
             if (image == null) return null
             val bitmap = imageToBitmap(image, dm.widthPixels, dm.heightPixels)
             image.close()
+            scheduleIdleStop()
             val cropH = (dm.heightPixels * fraction).toInt().coerceIn(1, dm.heightPixels)
             Bitmap.createBitmap(bitmap, 0, 0, dm.widthPixels, cropH)
         } catch (t: Throwable) {
