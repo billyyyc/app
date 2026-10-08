@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <shape xmlns:android="http://schemas.android.com/apk/res/android"
     android:shape="oval">
-    <!-- 半透明、无描边：不挡内容、不显眼 -->
-    <solid android:color="#8F6750A4" />
+    <!-- 半透明 + 一圈细白边（用户说这个观感好），整体更透 -->
+    <solid android:color="#B36A4FB8" />
+    <stroke android:width="2dp" android:color="#E6FFFFFF" />
 </shape>

@@ -87,7 +87,8 @@ class MainActivity : AppCompatActivity() {
     private fun handleDebugQuery(intent: Intent?) {
         val q = intent?.getStringExtra("debug_query")?.takeIf { it.isNotBlank() }
         val f = intent?.getStringExtra("debug_ocr_file")?.takeIf { it.isNotBlank() }
-        if (q == null && f == null) return
+        val b = intent?.getStringExtra("debug_ball")
+        if (q == null && f == null && b == null) return
         if (q != null) Diag.log(this, "App", "调试验证查询：$q")
         if (f != null) Diag.log(this, "App", "调试验证OCR：$f")
         runCatching {
@@ -95,6 +96,7 @@ class MainActivity : AppCompatActivity() {
                 Intent(this, FloatingBallService::class.java).apply {
                     if (q != null) putExtra("debug_query", q)
                     if (f != null) putExtra("debug_ocr_file", f)
+                    if (b != null) putExtra("debug_ball", b)
                 }
             )
         }
@@ -138,6 +140,13 @@ class MainActivity : AppCompatActivity() {
             Diag.log(this, "App", "无障碍未连接，且当前无自愈权限（需要一次性 adb 授权）")
             return
         }
+        // 自愈会让系统再弹一次「检测到无障碍权限」的提醒，别太频繁：5 分钟内只自动修一次
+        val now = System.currentTimeMillis()
+        if (now - prefs.getLong("last_auto_repair", 0L) < 5 * 60 * 1000L) {
+            Diag.log(this, "App", "无障碍未连接，但刚自动修过（5 分钟内），跳过")
+            return
+        }
+        prefs.edit().putLong("last_auto_repair", now).apply()
         val wasEnabled = AccessibilitySupport.isEnabled(this)
         Diag.log(
             this, "App",

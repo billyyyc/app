@@ -323,30 +323,46 @@ object ResultCardView {
     fun showMenu(context: Context, onAction: (MenuAction) -> Unit) {
         currentMenu?.let { remove(context, it) }
         val wm = context.getSystemService(Context.WINDOW_SERVICE) as WindowManager
+        // 全屏半透明底：点菜单以外的地方即可关闭（之前只有菜单本身，点空白关不掉）
         val root = LinearLayout(context).apply {
+            orientation = LinearLayout.VERTICAL
+            setBackgroundColor(0x88000000.toInt())
+            gravity = Gravity.CENTER
+        }
+        val card = LinearLayout(context).apply {
             orientation = LinearLayout.VERTICAL
             setBackgroundColor(context.getColor(android.R.color.white))
             val pad = dp(context, 12)
             setPadding(pad, pad, pad, pad)
+            layoutParams = LinearLayout.LayoutParams(dp(context, 240), LinearLayout.LayoutParams.WRAP_CONTENT)
+            setOnClickListener { }
         }
         val actions = listOf(
             "手动搜索" to MenuAction.MANUAL,
+            "更换悬浮球样式" to MenuAction.BALL_STYLE,
             "刷新数据" to MenuAction.REFRESH,
             "隐藏悬浮球" to MenuAction.HIDE,
             "设置/权限" to MenuAction.SETTINGS
         )
         for ((label, action) in actions) {
-            root.addView(Button(context).apply {
+            card.addView(Button(context).apply {
                 text = label
                 setOnClickListener { onAction(action); remove(context, root); currentMenu = null }
             })
         }
+        card.addView(Button(context).apply {
+            text = "取消"
+            setOnClickListener { remove(context, root); currentMenu = null }
+        })
+        root.addView(card)
+        root.setOnClickListener { remove(context, root); currentMenu = null }
         val params = WindowManager.LayoutParams(
-            dp(context, 180), WindowManager.LayoutParams.WRAP_CONTENT,
+            WindowManager.LayoutParams.MATCH_PARENT,
+            WindowManager.LayoutParams.MATCH_PARENT,
             WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
             PixelFormat.TRANSLUCENT
-        ).apply { gravity = Gravity.CENTER }
+        ).apply { gravity = Gravity.TOP }
         try {
             wm.addView(root, params)
         } catch (t: Throwable) {
@@ -355,6 +371,64 @@ object ResultCardView {
             return
         }
         currentMenu = root
+    }
+
+    /**
+     * 悬浮球样式选择：每行一个样式（左预览 + 右说明），点一下就换。
+     * 点空白处 / 「取消」都能关掉。
+     */
+    fun showBallPicker(
+        context: Context,
+        styles: List<Triple<String, View, Boolean>>,
+        onPick: (Int) -> Unit
+    ) {
+        dismiss()
+        val wm = context.getSystemService(Context.WINDOW_SERVICE) as WindowManager
+        val root = LinearLayout(context).apply {
+            orientation = LinearLayout.VERTICAL
+            setBackgroundColor(0x99000000.toInt())
+            gravity = Gravity.CENTER
+            setPadding(dp(context, 16), dp(context, 16), dp(context, 16), dp(context, 16))
+        }
+        val card = LinearLayout(context).apply {
+            orientation = LinearLayout.VERTICAL
+            setBackgroundColor(context.getColor(android.R.color.white))
+            val pad = dp(context, 14)
+            setPadding(pad, pad, pad, pad)
+            setOnClickListener { }
+        }
+        card.addView(TextView(context).apply {
+            text = "选择悬浮球样式（点一下即生效）"
+            textSize = 16f
+            setTypeface(null, Typeface.BOLD)
+            setTextColor(context.getColor(R.color.text_primary))
+        })
+        styles.forEachIndexed { index, (label, preview, selected) ->
+            val row = LinearLayout(context).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(0, dp(context, 10), 0, dp(context, 10))
+                setOnClickListener { dismiss(); onPick(index) }
+            }
+            row.addView(preview, LinearLayout.LayoutParams(dp(context, 96), dp(context, 60)))
+            row.addView(TextView(context).apply {
+                text = if (selected) "$label　✓ 当前" else label
+                textSize = 15f
+                setTextColor(
+                    context.getColor(if (selected) R.color.purple_700 else R.color.text_primary)
+                )
+                setPadding(dp(context, 8), 0, 0, 0)
+            })
+            card.addView(row)
+        }
+        card.addView(Button(context).apply {
+            text = "取消"
+            setOnClickListener { dismiss() }
+        })
+        root.addView(card)
+        root.setOnClickListener { dismiss() }
+        addOverlay(context, root)
+        current = root
     }
 
     fun showManualSearch(context: Context, initialText: String = "", onSearch: (String) -> Unit) {
@@ -448,4 +522,4 @@ object ResultCardView {
         (v * context.resources.displayMetrics.density + 0.5f).toInt()
 }
 
-enum class MenuAction { MANUAL, REFRESH, HIDE, SETTINGS }
+enum class MenuAction { MANUAL, BALL_STYLE, REFRESH, HIDE, SETTINGS }

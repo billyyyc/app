@@ -42,8 +42,6 @@ class FloatingBallService : Service() {
         private const val TAG = "SLK-Ball"
         private const val CHANNEL_ID = "float_channel"
         private const val NOTIF_ID = 1
-        /** 悬浮球直径（dp）——半透明，尽量不挡内容 */
-        private const val BALL_DP = 48
         var isRunning = false
     }
 
@@ -130,6 +128,10 @@ class FloatingBallService : Service() {
             // 走和 OCR 完全一样的处理链路（含多段备注拆分）
             handleOcrText(it)
         }
+        // 调试入口：直接弹出悬浮球样式选择（用于出效果图）
+        if (intent?.getStringExtra("debug_ball") != null) {
+            showBallStylePicker()
+        }
         // 调试入口：对指定图片跑一次 OCR（用于评估识别准确率，不弹卡片）
         intent?.getStringExtra("debug_ocr_file")?.takeIf { it.isNotBlank() }?.let { file ->
             CoroutineScope(Dispatchers.IO).launch {
@@ -160,16 +162,19 @@ class FloatingBallService : Service() {
 
     private fun addBall(): Boolean {
         ball = LayoutInflater.from(this).inflate(R.layout.floating_ball, null)
+        val st = ballStyle()
         params = WindowManager.LayoutParams(
-            dp(BALL_DP), dp(BALL_DP),
+            dp(st.widthDp), dp(st.heightDp),
             WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
             PixelFormat.TRANSLUCENT
         ).apply {
             gravity = Gravity.TOP or Gravity.START
-            x = 0
+            // 默认停在屏幕右边（用户要求）
+            x = resources.displayMetrics.widthPixels - dp(st.widthDp)
             y = dp(240)
         }
+        applyBallStyle()
         ball.setOnTouchListener(DragListener())
         ball.setOnClickListener { onBallClick() }
         ball.setOnLongClickListener { showMenu(); true }
@@ -182,6 +187,61 @@ class FloatingBallService : Service() {
             return false
         }
         return true
+    }
+
+    // ---- 悬浮球样式 ----
+
+    private fun appPrefs() = getSharedPreferences("app_state", MODE_PRIVATE)
+
+    private fun ballStyle(): BallStyle =
+        BallStyle.entries.getOrElse(appPrefs().getInt("ball_style", 0)) { BallStyle.RING }
+
+    /** 把当前样式应用到球上（文字、字号、背景、窗口尺寸），并同步窗口参数 */
+    private fun applyBallStyle() {
+        val st = ballStyle()
+        val tv = ball.findViewById<android.widget.TextView>(R.id.ball_text) ?: return
+        tv.text = st.text
+        tv.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, st.textSp)
+        tv.setTextColor(0xE6FFFFFF.toInt())
+        tv.includeFontPadding = false
+        tv.setBackgroundResource(st.bg)
+        if (::params.isInitialized) {
+            params.width = dp(st.widthDp)
+            params.height = dp(st.heightDp)
+            val screenW = resources.displayMetrics.widthPixels
+            if (params.x + params.width > screenW) params.x = screenW - params.width
+            runCatching { wm.updateViewLayout(ball, params) }
+        }
+    }
+
+    private fun setBallStyle(index: Int) {
+        appPrefs().edit().putInt("ball_style", index).apply()
+        applyBallStyle()
+        Diag.log(this, "Ball", "切换样式：${BallStyle.entries.getOrNull(index)?.label}")
+        toast("已切换：${BallStyle.entries.getOrNull(index)?.label ?: ""}")
+    }
+
+    /** 样式预览（每行：左预览 + 右说明），点行即切换 */
+    private fun showBallStylePicker() {
+        val styles = BallStyle.entries.mapIndexed { i, st ->
+            Triple(st.label, ballPreview(st), i == appPrefs().getInt("ball_style", 0))
+        }
+        ResultCardView.showBallPicker(this, styles) { index -> setBallStyle(index) }
+    }
+
+    /** 造一个用于预览的球视图（固定放在 96x60 的框里居中） */
+    private fun ballPreview(st: BallStyle): android.view.View {
+        val box = android.widget.FrameLayout(this)
+        val tv = android.widget.TextView(this).apply {
+            text = st.text
+            gravity = Gravity.CENTER
+            includeFontPadding = false
+            setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, st.textSp)
+            setTextColor(0xE6FFFFFF.toInt())
+            setBackgroundResource(st.bg)
+        }
+        box.addView(tv, android.widget.FrameLayout.LayoutParams(dp(st.widthDp), dp(st.heightDp), Gravity.CENTER))
+        return box
     }
 
     private fun onBallClick() {
@@ -322,9 +382,26 @@ class FloatingBallService : Service() {
         if (acc != null && acc.canTakeScreenshotNow()) {
             toast("正在识别微信标题…")
             CoroutineScope(Dispatchers.Main).launch {
-                val full = acc.captureScreen()
-                if (full == null) {
-                    Diag.log(this@FloatingBallService, "Ball", "无障碍截屏失败 → 转手动搜索")
+                val skip = acc.statusBarHeightPx()
+                // 抓两帧 + 每帧多种放大倍率：候选更多，再用学员库挑最可信的一条
+                val candidates = LinkedHashSet<String>()
+                var captured = false
+                repeat(2) { frame ->
+                    val full = acc.captureScreen()
+                    if (full != null) {
+                        captured = true
+                        val list = kotlinx.coroutines.withContext(Dispatchers.IO) {
+                            OcrFallback.titleCandidates(
+                                this@FloatingBallService, full, skip, (skip * 1.2f).toInt()
+                            )
+                        }
+                        candidates.addAll(list)
+                        runCatching { full.recycle() }
+                    }
+                    if (frame == 0) delay(220)
+                }
+                if (!captured || candidates.isEmpty()) {
+                    Diag.log(this@FloatingBallService, "Ball", "无障碍截屏失败/无候选 → 转手动搜索")
                     notifyCard(
                         "无法读取微信标题",
                         "自动识别没成功，请手动输入姓名搜索。",
@@ -332,26 +409,12 @@ class FloatingBallService : Service() {
                     )
                     return@launch
                 }
-                val skip = acc.statusBarHeightPx()
-                // 多种放大倍率各识别一遍，再用「学员库」当字典挑最可信的一条
-                val candidates = kotlinx.coroutines.withContext(Dispatchers.IO) {
-                    OcrFallback.titleCandidates(
-                        this@FloatingBallService, full, skip, (skip * 1.2f).toInt()
-                    )
-                }
-                runCatching { full.recycle() }
-                if (candidates.isEmpty()) {
-                    Diag.log(this@FloatingBallService, "Ball", "OCR 没有候选行")
-                    notifyCard(
-                        "未能识别",
-                        "没有识别出姓名。请手动输入姓名搜索。",
-                        listOf("手动搜索" to { showManualSearch() })
-                    )
-                    return@launch
-                }
                 val best = kotlinx.coroutines.withContext(Dispatchers.IO) {
                     val all = (applicationContext as App).database.studentDao().getAll()
-                    candidates.maxByOrNull { scoreAgainstDb(it, all) } ?: candidates.first()
+                    val raw = candidates.maxByOrNull { scoreText(it, all) } ?: candidates.first()
+                    // 用学到的字形纠正再试一次，谁在库里对得上就用谁
+                    val fixed = applyCharFixes(raw)
+                    if (fixed != raw && scoreText(fixed, all) > scoreText(raw, all)) fixed else raw
                 }
                 Diag.log(
                     this@FloatingBallService, "Ball",
@@ -428,7 +491,8 @@ class FloatingBallService : Service() {
             val hits = LinkedHashSet<String>()
             val unresolved = ArrayList<String>()
             for (seg in segs) {
-                val resolved = fixes[seg] ?: seg
+                // 先查纠正记忆，再用学到的字形纠正
+                val resolved = fixes[seg] ?: applyCharFixes(seg)
                 val r = Matcher.match(resolved, all)
                 if (r.found && !r.approximate && r.byName.size == 1) {
                     hits.add(r.byName.keys.first())
@@ -558,6 +622,11 @@ class FloatingBallService : Service() {
 
     /** 用学员库给 OCR 候选打分：能精确命中库里的姓名，说明这段识别更可信 */
     private fun scoreAgainstDb(text: String, all: List<Student>): Int {
+        // 原始与「字形纠正后」取高分
+        return maxOf(scoreText(text, all), scoreText(applyCharFixes(text), all))
+    }
+
+    private fun scoreText(text: String, all: List<Student>): Int {
         val segs = splitSegments(text)
         if (segs.isEmpty()) return 0
         var score = 0
@@ -609,7 +678,47 @@ class FloatingBallService : Service() {
         getSharedPreferences("app_state", MODE_PRIVATE).edit()
             .putString("ocr_fix", m.entries.joinToString("\n") { "${it.key}=${it.value}" })
             .apply()
+        learnCharFixes(rawOcr, name)
         Diag.log(this, "OCR", "记住纠正：$rawOcr -> $name")
+    }
+
+    // ---- 字形自学习：改正过的错字，以后自动换回来 ----
+
+    private fun prefs() = getSharedPreferences("app_state", MODE_PRIVATE)
+
+    private fun charFixMap(): Map<Char, Char> =
+        prefs().getString("ocr_char_fix", "").orEmpty()
+            .split('\n')
+            .filter { it.length >= 3 && it[1] == '=' }
+            .associate { it[0] to it[2] }
+
+    /**
+     * 从「认错的名字 → 正确的名字」里学字形对应关系。
+     * 例：陈恰形 → 陈怡彤 就记住 恰→怡、形→彤；下次再认成 卢恰彤/卢映形 也能自动改对。
+     */
+    private fun learnCharFixes(wrong: String, right: String) {
+        if (wrong.length != right.length || wrong == right) return
+        val m = charFixMap().toMutableMap()
+        var n = 0
+        for (i in wrong.indices) {
+            if (wrong[i] != right[i]) {
+                m[wrong[i]] = right[i]
+                n++
+            }
+        }
+        if (n == 0) return
+        prefs().edit()
+            .putString("ocr_char_fix", m.entries.joinToString("\n") { "${it.key}=${it.value}" })
+            .apply()
+        Diag.log(this, "OCR", "学会字形纠正：${m.entries.joinToString(" ") { "${it.key}→${it.value}" }}")
+    }
+
+    /** 用学到的错字表把识别结果换一遍 */
+    private fun applyCharFixes(s: String): String {
+        val m = charFixMap()
+        if (m.isEmpty()) return s
+        val out = buildString { for (c in s) append(m[c] ?: c) }
+        return out
     }
 
     /**
@@ -642,6 +751,7 @@ class FloatingBallService : Service() {
         ResultCardView.showMenu(this) {
             when (it) {
                 MenuAction.MANUAL -> ResultCardView.showManualSearch(this) { q -> query(q) }
+                MenuAction.BALL_STYLE -> showBallStylePicker()
                 MenuAction.REFRESH -> toast("数据已在导入时更新，无需刷新")
                 MenuAction.HIDE -> {
                     // 明确记住「是用户自己要隐藏的」，否则下次打开 App 会自动又冒出来
@@ -694,7 +804,7 @@ class FloatingBallService : Service() {
                 MotionEvent.ACTION_UP -> {
                     // 贴边：吸附到最近一侧
                     val screenW = resources.displayMetrics.widthPixels
-                    params.x = if (params.x < screenW / 2) 0 else screenW - dp(BALL_DP)
+                    params.x = if (params.x < screenW / 2) 0 else screenW - params.width
                     wm.updateViewLayout(ball, params)
                     if (moved) return true // 拖动不触发点击
                 }
