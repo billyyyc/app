@@ -318,7 +318,8 @@ object ResultCardView {
     private enum class Style { HEADER, NORMAL, EMPTY, LATEST }
 
     private fun row(context: Context, cols: List<String>, style: Style): TableRow {
-        val row = TableRow(context)
+        // baselineAligned=false：否则表格按"文字基线"对齐，内容行数不同的格子会被错开、看着一高一低
+        val row = TableRow(context).apply { isBaselineAligned = false }
         for (c in cols) {
             row.addView(TextView(context).apply {
                 text = c
@@ -680,12 +681,13 @@ object ResultCardView {
         studentIndex: Int?,
         onPickName: ((String) -> Unit)?
     ): TableRow {
-        val row = TableRow(context)
+        val row = TableRow(context).apply { isBaselineAligned = false }
         cols.forEachIndexed { idx, text ->
             val isNameCol = idx == 1 && studentIndex != null
             val tv = TextView(context).apply {
                 this.text = text
-                textSize = 12f
+                // 全表统一字号：字号不同 → 三行高度不同 → 格子会高低不齐（之前姓名格 14sp 导致错开）
+                textSize = 13f
                 gravity = Gravity.CENTER
                 setPadding(dp(context, 6), dp(context, 6), dp(context, 6), dp(context, 6))
                 setLineSpacing(0f, 1.0f)
@@ -707,7 +709,6 @@ object ResultCardView {
                             if (isNameCol) {
                                 setTypeface(null, Typeface.BOLD)
                                 setTextColor(context.getColor(R.color.purple_700))
-                                textSize = 14f
                             } else {
                                 setTextColor(context.getColor(R.color.text_secondary))
                             }
